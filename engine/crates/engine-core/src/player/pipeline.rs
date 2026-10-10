@@ -92,6 +92,10 @@ pub fn plan_output(i: &PlanInput) -> PipelinePlan {
             }
             None if i.transport == Transport::Bluetooth => {
                 if let Some(p) = try_passthrough(i, i.shared_caps, false) { return p; }
+                let keep = i.current.filter(|&(_, ex)| !ex).map(|(f, _)| f);
+                let mut p = processed(i, i.shared_caps, false, keep);
+                p.notes.push(format!("Device can't play {} Hz / {} ch bit-perfect — using processed mode", s.sample_rate, s.channels));
+                return p;
             }
             None => {
                 let mut p = processed(i, i.shared_caps, false, None);
@@ -184,6 +188,28 @@ mod tests {
         assert_eq!(p.format.sample_rate, 44_100);
         assert_eq!(p.resample_from, Some(96_000));
         assert_eq!(p.passthrough, Passthrough::None);
+    }
+
+    #[test]
+    fn bluetooth_bit_perfect_fallback_reports_reason() {
+        let sh = DeviceCaps { rates: vec![48_000], ..caps(false) };
+        let s = int(44_100, 2, 16);
+        let mut i = input(&s, OutputMode::BitPerfect, &sh, None);
+        i.transport = Transport::Bluetooth;
+        let p = plan_output(&i);
+        assert!(!p.bit_perfect && !p.exclusive);
+        assert_eq!(p.passthrough, Passthrough::None);
+        assert!(p.notes.iter().any(|n| n == "Device can't play 44100 Hz / 2 ch bit-perfect — using processed mode"), "{:?}", p.notes);
+    }
+
+    #[test]
+    fn bit_perfect_without_exclusive_caps_on_non_bluetooth_is_processed_with_note() {
+        let sh = caps(false);
+        let s = int(48_000, 2, 16);
+        let p = plan_output(&input(&s, OutputMode::BitPerfect, &sh, None));
+        assert!(!p.bit_perfect && !p.exclusive);
+        assert_eq!(p.passthrough, Passthrough::None);
+        assert_eq!(p.notes, vec!["Exclusive mode unavailable — using processed mode".to_string()]);
     }
 
     #[test]

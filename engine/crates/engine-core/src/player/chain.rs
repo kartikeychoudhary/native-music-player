@@ -17,11 +17,11 @@ pub struct ProcessChain {
 
 impl ProcessChain {
     pub fn new(plan: PipelinePlan, src: PcmSpec, reuse: Option<StreamResampler>) -> Self {
-        let resampler = plan.resample_from.and_then(|from| {
+        let resampler = plan.resample_from.map(|from| {
             let want = (from, plan.format.sample_rate, plan.format.channels as usize);
             match reuse {
-                Some(r) if r.config() == want => Some(r),
-                _ => StreamResampler::new(want.0, want.1, want.2).ok(),
+                Some(r) if r.config() == want => r,
+                _ => StreamResampler::new(want.0, want.1, want.2).expect("resampler config from plan_output must be valid"),
             }
         });
         Self { plan, src, resampler, dither: Ditherer::new(0x5EED), f: vec![], mapped: vec![], resampled: vec![] }
@@ -93,14 +93,45 @@ mod tests {
         assert!((frames as i64 - 48_000).abs() <= 2);
     }
 
+    fn sine_stereo(start: usize, frames: usize) -> Vec<f32> {
+        (start..start + frames).flat_map(|i| { let s = (2.0 * std::f64::consts::PI * 1000.0 * i as f64 / 44_100.0).sin() as f32 * 0.5; [s, s] }).collect()
+    }
+
     #[test]
-    fn resampler_can_be_handed_to_the_next_track() {
+    fn resampler_handoff_preserves_buffered_latency_across_tracks() {
         let src = PcmSpec { sample_rate: 44_100, channels: 2, kind: SampleKind::Float };
         let fmt = OutputFormat { sample_rate: 48_000, channels: 2, sample: F32 };
         let mut a = ProcessChain::new(plan(Passthrough::None, fmt, Some(44_100), ChannelMap::Identity), src, None);
+        let mut out_a = vec![];
+        a.process(&PcmBlock { spec: src, data: PcmData::Float(sine_stereo(0, 22_050)) }, &mut out_a);
         let r = a.take_resampler().unwrap();
         assert_eq!(r.config(), (44_100, 48_000, 2));
-        let b = ProcessChain::new(plan(Passthrough::None, fmt, Some(44_100), ChannelMap::Identity), src, Some(r));
-        assert!(b.plan().resample_from.is_some());
+        let mut b = ProcessChain::new(plan(Passthrough::None, fmt, Some(44_100), ChannelMap::Identity), src, Some(r));
+        let mut out_b = vec![];
+        b.process(&PcmBlock { spec: src, data: PcmData::Float(sine_stereo(22_050, 22_050)) }, &mut out_b);
+        b.flush(&mut out_b);
+        let frames = (out_a.len() + out_b.len()) / fmt.bytes_per_frame();
+        assert_eq!(frames, 48_000);
+    }
+
+    #[test]
+    fn mismatched_reused_resampler_is_rebuilt_from_the_plan() {
+        let src = PcmSpec { sample_rate: 44_100, channels: 2, kind: SampleKind::Float };
+        let fmt = OutputFormat { sample_rate: 48_000, channels: 2, sample: F32 };
+        let wrong = StreamResampler::new(44_100, 96_000, 2).unwrap();
+        let mut c = ProcessChain::new(plan(Passthrough::None, fmt, Some(44_100), ChannelMap::Identity), src, Some(wrong));
+        let mut out = vec![];
+        c.process(&PcmBlock { spec: src, data: PcmData::Float(sine_stereo(0, 44_100)) }, &mut out);
+        c.flush(&mut out);
+        assert_eq!(out.len() / fmt.bytes_per_frame(), 48_000);
+        assert_eq!(c.take_resampler().unwrap().config(), (44_100, 48_000, 2));
+    }
+
+    #[test]
+    #[should_panic(expected = "resampler config from plan_output must be valid")]
+    fn invalid_resampler_config_fails_loudly() {
+        let src = PcmSpec { sample_rate: 44_100, channels: 2, kind: SampleKind::Float };
+        let fmt = OutputFormat { sample_rate: 48_000, channels: 2, sample: F32 };
+        let _ = ProcessChain::new(plan(Passthrough::None, fmt, Some(0), ChannelMap::Identity), src, None);
     }
 }
