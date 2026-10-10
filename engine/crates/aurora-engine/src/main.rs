@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand};
 use engine_core::output::null::{NullBackend, NullMode};
 use engine_core::output::{system::SystemBackend, OutputBackend};
 use engine_core::player::{spawn_player, Command, PlayerConfig, PlayerEvent};
+use protocol::PlaybackStatus;
 
 #[derive(Parser)]
 #[command(name = "aurora-engine", version, about = "Aurora audio engine")]
@@ -85,21 +86,37 @@ fn devices(null: bool) -> i32 {
 }
 
 fn play(files: Vec<PathBuf>, bit_perfect: bool, device: Option<String>, null: bool, speed: f64) -> i32 {
+    if files.is_empty() {
+        eprintln!("play: no files given");
+        return 2;
+    }
     let (tx, rx) = crossbeam_channel::unbounded();
     let player = spawn_player(backend(null, speed), PlayerConfig::default(), tx);
     if bit_perfect { player.send(Command::SetMode(protocol::OutputMode::BitPerfect)); }
     if device.is_some() { player.send(Command::SetDevice(device)); }
     player.send(Command::SetQueue { paths: files, start: 0 });
     player.send(Command::Play(None));
+    // The player thread keeps its sender alive, so the loop must end on events: `Ended`, or a
+    // `stopped` state after playback began or an error occurred (the initial stopped state
+    // published by SetQueue precedes both and must not end it).
+    let (mut saw_error, mut saw_playing) = (false, false);
     for ev in rx.iter() {
         let line = match &ev {
             PlayerEvent::SignalPath(s) => serde_json::json!({ "event": "signalPath", "data": s }),
-            PlayerEvent::Error(e) => serde_json::json!({ "event": "error", "data": e }),
+            PlayerEvent::Error(e) => { saw_error = true; serde_json::json!({ "event": "error", "data": e }) }
+            PlayerEvent::State(st) => {
+                match st.status {
+                    PlaybackStatus::Playing => saw_playing = true,
+                    PlaybackStatus::Stopped if saw_playing || saw_error => break,
+                    _ => {}
+                }
+                continue;
+            }
             PlayerEvent::Ended => { println!("{}", serde_json::json!({ "event": "ended" })); break; }
             _ => continue,
         };
         println!("{line}");
     }
     player.shutdown();
-    0
+    i32::from(saw_error)
 }
