@@ -1,5 +1,6 @@
 pub mod dsd;
 pub mod mp4_gapless;
+pub mod opus_dec;
 pub mod symphonia_dec;
 pub mod trim;
 
