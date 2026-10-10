@@ -21,3 +21,23 @@ fn probe_unsupported_exits_2() {
     assert_eq!(out.status.code(), Some(2));
     assert!(out.stdout.is_empty(), "errors must never be written to stdout");
 }
+
+#[test]
+fn devices_prints_a_json_array() {
+    let out = Command::new(env!("CARGO_BIN_EXE_aurora-engine")).args(["devices", "--null"]).output().unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v[0]["id"], "null");
+}
+
+#[test]
+fn play_null_runs_to_end_and_prints_signal_path() {
+    let out = Command::new(env!("CARGO_BIN_EXE_aurora-engine"))
+        .args(["play", "--null", "--speed", "20", "--bit-perfect", &fixture("short_a.flac"), &fixture("short_b.flac")])
+        .output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let text = String::from_utf8(out.stdout).unwrap();
+    let paths: Vec<serde_json::Value> = text.lines().filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok()).filter(|v| v["event"] == "signalPath").collect();
+    assert!(!paths.is_empty());
+    assert_eq!(paths[0]["data"]["bitPerfect"], true);
+}

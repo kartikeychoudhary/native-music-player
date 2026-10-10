@@ -1,6 +1,15 @@
+pub mod cpal_out;
 pub mod format;
 pub mod null;
 pub mod ring;
+pub mod system;
+
+#[cfg(windows)]
+pub mod wasapi_excl;
+#[cfg(target_os = "macos")]
+pub mod coreaudio_hog;
+#[cfg(target_os = "linux")]
+pub mod alsa_hw;
 
 use format::{DeviceSample, OutputFormat};
 use protocol::{BluetoothInfo, DeviceInfo, ErrorCode, ShareMode, Transport};
