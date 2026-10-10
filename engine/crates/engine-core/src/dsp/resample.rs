@@ -71,8 +71,12 @@ impl StreamResampler {
         }
         let keep = (expected - start_total) as usize * self.ch;
         out.truncate(start_len + keep);
-        self.out_total = expected;
+        // Leave the instance ready for the next stream: clear the delay line and re-arm the delay drop.
         self.pending.clear();
+        self.r.reset();
+        self.to_drop = self.r.output_delay();
+        self.in_total = 0;
+        self.out_total = 0;
     }
 }
 
@@ -88,11 +92,49 @@ mod tests {
         for chunk in input.chunks(2 * 777) { r.process(chunk, &mut out); }
         r.flush(&mut out);
         let frames = out.len() / 2;
-        assert!((frames as i64 - 48_000).abs() <= 2, "{frames}");
+        assert_eq!(frames, 48_000);
         // Zero crossings over the middle 0.5 s ≈ 2 per cycle → 1000 Hz.
         let left: Vec<f64> = out.iter().step_by(2).copied().collect();
         let mid = &left[12_000..36_000];
         let crossings = mid.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count();
         assert!((crossings as i64 - 1000).abs() <= 2, "{crossings}");
+    }
+
+    fn sine(freq: f64, frames: usize) -> Vec<f64> {
+        (0..frames).flat_map(|i| { let s = (2.0 * std::f64::consts::PI * freq * i as f64 / 44_100.0).sin() * 0.5; [s, s] }).collect()
+    }
+
+    fn run_stream(r: &mut StreamResampler, input: &[f64], chunk_frames: usize) -> Vec<f64> {
+        let mut out = vec![];
+        for chunk in input.chunks(2 * chunk_frames) { r.process(chunk, &mut out); }
+        r.flush(&mut out);
+        out
+    }
+
+    #[test]
+    fn reusable_after_flush() {
+        let a = sine(440.0, 30_000);
+        let b = sine(1000.0, 20_000);
+        let mut r = StreamResampler::new(44_100, 48_000, 2).unwrap();
+        let _ = run_stream(&mut r, &a, 777);
+        let second = run_stream(&mut r, &b, 777);
+        let expected = (20_000f64 * 48_000.0 / 44_100.0).round() as usize;
+        assert_eq!(second.len() / 2, expected);
+        let fresh = run_stream(&mut StreamResampler::new(44_100, 48_000, 2).unwrap(), &b, 777);
+        assert_eq!(fresh.len(), second.len());
+        for (i, (x, y)) in second.iter().zip(&fresh).take(256 * 2).enumerate() {
+            assert!((x - y).abs() < 1e-9, "sample {i}: {x} vs {y}");
+        }
+    }
+
+    #[test]
+    fn chunked_process_equals_single_process() {
+        let input = sine(1000.0, 25_000);
+        let chunked = run_stream(&mut StreamResampler::new(44_100, 48_000, 2).unwrap(), &input, 313);
+        let single = run_stream(&mut StreamResampler::new(44_100, 48_000, 2).unwrap(), &input, 25_000);
+        assert_eq!(chunked.len(), single.len());
+        for (i, (x, y)) in chunked.iter().zip(&single).enumerate() {
+            assert!((x - y).abs() < 1e-9, "sample {i}: {x} vs {y}");
+        }
     }
 }
