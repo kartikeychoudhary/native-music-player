@@ -4,3 +4,36 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
+
+[features]
+default = ["fdk-aac"]
+fdk-aac = ["dep:fdk-aac"]
+test-support = []
+
+[dependencies]
+protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+crossbeam-channel.workspace = true
+symphonia.workspace = true
+opus.workspace = true
+fdk-aac = { workspace = true, optional = true }
+rubato.workspace = true
+audioadapter-buffers.workspace = true
+rtrb.workspace = true
+cpal.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+alsa = "0.11"
+cpal = { workspace = true, features = ["pipewire"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wasapi = "0.25.0"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+coreaudio-rs = "0.14.2"
+
+[dev-dependencies]
+engine-core = { path = ".", default-features = false, features = ["test-support"] }

@@ -2,5 +2,9 @@
 name = "fixtures-gen"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 publish = false
+
+[dependencies]
+fdk-aac.workspace = true
+engine-core = { path = "../engine-core", features = ["test-support"] }
+anyhow.workspace = true
