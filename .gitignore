@@ -1,0 +1,20 @@
+# Brainstorming companion
+.superpowers/
+
+# Rust
+engine/target/
+
+# Node / Electron
+node_modules/
+app/out/
+app/dist/
+app/release/
+
+# Generated test fixtures
+fixtures/out/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
