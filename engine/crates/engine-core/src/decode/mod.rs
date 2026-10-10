@@ -1,5 +1,6 @@
 pub mod dsd;
 pub mod mp4_gapless;
+pub mod symphonia_dec;
 pub mod trim;
 
 use crate::pcm::{PcmBlock, PcmSpec};
