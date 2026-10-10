@@ -1,6 +1,6 @@
 //! Test/headless output. Manual mode: the test drives the "callback" with `pull`.
 //! Realtime mode: a thread pulls at (speed x real time). Both record every byte taken from the ring.
-use std::sync::atomic::{AtomicBool, Ordering::*};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::*};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -21,6 +21,8 @@ struct Inner {
     opened: Mutex<Vec<(OutputFormat, bool)>>,
     source: Mutex<Option<RingSource>>,
     fail_exclusive: AtomicBool,
+    /// Incremented per `open`; a stream only clears `source` if it is still the latest.
+    generation: AtomicU64,
 }
 
 pub struct NullBackend { inner: Arc<Inner> }
@@ -43,6 +45,7 @@ impl NullBackend {
             opened: Mutex::new(Vec::new()),
             source: Mutex::new(None),
             fail_exclusive: AtomicBool::new(false),
+            generation: AtomicU64::new(0),
         });
         (NullBackend { inner: inner.clone() }, NullHandle { inner })
     }
@@ -70,7 +73,7 @@ impl NullHandle {
     }
 }
 
-pub struct NullStream { info: StreamInfo, alive: Arc<AtomicBool>, inner: Arc<Inner> }
+pub struct NullStream { info: StreamInfo, alive: Arc<AtomicBool>, inner: Arc<Inner>, generation: u64 }
 
 impl OutputStream for NullStream {
     fn info(&self) -> &StreamInfo { &self.info }
@@ -89,7 +92,8 @@ impl OutputStream for NullStream {
 impl Drop for NullStream {
     fn drop(&mut self) {
         self.alive.store(false, Relaxed);
-        *self.inner.source.lock().unwrap() = None;
+        let mut source = self.inner.source.lock().unwrap();
+        if self.inner.generation.load(Acquire) == self.generation { *source = None; }
     }
 }
 
@@ -111,7 +115,10 @@ impl OutputBackend for NullBackend {
     fn open(&self, _device: Option<&str>, format: OutputFormat, exclusive: bool, source: RingSource) -> Result<Box<dyn OutputStream>, OutputError> {
         if exclusive && self.inner.fail_exclusive.load(Relaxed) { return Err(OutputError::ExclusiveDenied("device busy".into())); }
         self.inner.opened.lock().unwrap().push((format, exclusive));
-        *self.inner.source.lock().unwrap() = Some(source);
+        let mut slot = self.inner.source.lock().unwrap();
+        let generation = self.inner.generation.fetch_add(1, AcqRel) + 1;
+        *slot = Some(source);
+        drop(slot);
         Ok(Box::new(NullStream {
             info: StreamInfo {
                 device_id: "null".into(), device_name: "Null Output".into(), transport: *self.inner.transport.lock().unwrap(),
@@ -119,6 +126,7 @@ impl OutputBackend for NullBackend {
             },
             alive: Arc::new(AtomicBool::new(true)),
             inner: self.inner.clone(),
+            generation,
         }))
     }
 
@@ -155,5 +163,22 @@ mod tests {
         let f = OutputFormat { sample_rate: 44_100, channels: 2, sample: DeviceSample::I16 };
         let (_p, src, _) = ring_pair(64, f);
         assert!(matches!(b.open(None, f, true, src), Err(OutputError::ExclusiveDenied(_))));
+    }
+
+    #[test]
+    fn dropping_a_replaced_stream_keeps_the_new_source() {
+        let (b, h) = NullBackend::new(NullMode::Manual);
+        let f = OutputFormat { sample_rate: 44_100, channels: 2, sample: DeviceSample::I16 };
+        let (_pa, src_a, _sha) = ring_pair(64, f);
+        let a = b.open(None, f, false, src_a).unwrap();
+        let (mut pb, src_b, shb) = ring_pair(64, f);
+        let _b = b.open(None, f, false, src_b).unwrap();
+        drop(a);
+        shb.playing.store(true, Relaxed);
+        let mut c = pb.write_chunk(4).unwrap();
+        c.as_mut_slices().0.copy_from_slice(&[9, 8, 7, 6]);
+        c.commit_all();
+        assert_eq!(h.pull(1), 1);
+        assert_eq!(h.recorded(), vec![9, 8, 7, 6]);
     }
 }

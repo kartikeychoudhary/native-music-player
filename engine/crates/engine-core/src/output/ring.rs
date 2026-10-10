@@ -42,11 +42,13 @@ impl RingSource {
     pub fn fill(&mut self, out: &mut [u8]) -> usize {
         let bpf = self.bpf;
         let discard_to = self.shared.discard_to.load(Acquire);
+        let mut discarded = false;
         if self.consumed < discard_to {
             let k = ((self.cons.slots() / bpf) as u64).min(discard_to - self.consumed) as usize;
             if k > 0 {
                 if let Ok(c) = self.cons.read_chunk(k * bpf) { c.commit_all(); }
                 self.consumed += k as u64;
+                discarded = true;
             }
         }
         let mut n = 0;
@@ -55,15 +57,20 @@ impl RingSource {
             let frames = want.min(self.cons.slots() / bpf);
             n = frames * bpf;
             if n > 0 {
-                let chunk = self.cons.read_chunk(n).expect("slots checked above");
-                let (a, b) = chunk.as_slices();
-                out[..a.len()].copy_from_slice(a);
-                out[a.len()..n].copy_from_slice(b);
-                chunk.commit_all();
-                self.consumed += frames as u64;
-                if self.shared.apply_gain.load(Relaxed) { apply_gain(&mut out[..n], self.sample, self.shared.gain()); }
+                // Cannot fail (n <= slots); `if let` keeps panics off the realtime path.
+                if let Ok(chunk) = self.cons.read_chunk(n) {
+                    let (a, b) = chunk.as_slices();
+                    out[..a.len()].copy_from_slice(a);
+                    out[a.len()..n].copy_from_slice(b);
+                    chunk.commit_all();
+                    self.consumed += frames as u64;
+                    if self.shared.apply_gain.load(Relaxed) { apply_gain(&mut out[..n], self.sample, self.shared.gain()); }
+                } else {
+                    n = 0;
+                }
             }
-            if frames < want && !self.shared.draining.load(Relaxed) { self.shared.underruns.fetch_add(1, Relaxed); }
+            // A fill that just discarded (seek) is not a dropout.
+            if frames < want && !discarded && !self.shared.draining.load(Relaxed) { self.shared.underruns.fetch_add(1, Relaxed); }
         }
         out[n..].fill(0);
         self.shared.consumed_frames.store(self.consumed, Release);
@@ -168,5 +175,21 @@ mod tests {
         push(&mut p, &1.0f32.to_le_bytes());
         s.fill(&mut out);
         assert_eq!(f32::from_le_bytes(out), 0.5);
+    }
+
+    #[test]
+    fn discard_that_empties_ring_does_not_count_underrun() {
+        let (mut p, mut s, sh) = ring_pair(16, fmt());
+        sh.playing.store(true, Relaxed);
+        push(&mut p, &[1; 12]); // frames 0..3
+        sh.discard_to.store(3, Release);
+        let mut out = [0xEEu8; 8];
+        assert_eq!(s.fill(&mut out), 0);
+        assert_eq!(out, [0; 8]);
+        assert_eq!(sh.underruns.load(Relaxed), 0);
+        assert_eq!(sh.consumed_frames.load(Relaxed), 3);
+        // a later genuine shortfall still counts
+        s.fill(&mut out);
+        assert_eq!(sh.underruns.load(Relaxed), 1);
     }
 }
