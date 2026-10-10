@@ -2,8 +2,10 @@ use std::fs::File;
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
-use super::DsdSource;
+use super::{validate_format, DsdSource};
 use crate::decode::DecodeError;
+
+const DSF_BLOCK: usize = 4096; // fixed by the DSF specification
 
 pub struct DsfReader {
     r: BufReader<File>,
@@ -28,11 +30,12 @@ pub fn open(path: &Path) -> Result<Box<dyn DsdSource>, DecodeError> {
         return Err(DecodeError::Unsupported("not a DSF file".into()));
     }
     let fmt = &hdr[40..80];
-    let (format_id, channels, rate, bps) = (u32le(&fmt[4..]), u32le(&fmt[12..]) as u16, u32le(&fmt[16..]), u32le(&fmt[20..]));
+    let (format_id, channels, rate, bps) = (u32le(&fmt[4..]), u32le(&fmt[12..]), u32le(&fmt[16..]), u32le(&fmt[20..]));
     if format_id != 0 { return Err(DecodeError::Unsupported("DSF: compressed DSD".into())); }
     let sample_count = u64le(&fmt[24..]);
     let block = u32le(&fmt[32..]) as usize;
-    if channels == 0 || block == 0 { return Err(DecodeError::Corrupt("DSF: bad fmt chunk".into())); }
+    let (channels, rate) = validate_format("DSF", channels.into(), rate.into())?;
+    if block != DSF_BLOCK { return Err(DecodeError::Unsupported(format!("DSF: block size {block} (expected {DSF_BLOCK})"))); }
     Ok(Box::new(DsfReader {
         r, channels, rate, lsb_first: bps == 1, block,
         data_start: 92, total_bytes: sample_count / 8, pos: 0, group: vec![0; block * channels as usize],

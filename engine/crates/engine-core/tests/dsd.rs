@@ -82,3 +82,53 @@ fn seek_moves_to_requested_output_frame() {
     while let Some(b) = dec.next_block().unwrap() { n += b.frames() as u64; }
     assert!((n as i64 - (total as i64 - 88_200)).abs() <= 64, "{n} vs {}", total - 88_200);
 }
+
+// --- malformed headers must yield Err, never a panic or an abort ---
+
+fn patched(src: &str, dst: &str, patch: impl FnOnce(&mut Vec<u8>)) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("aurora-dsd-malformed-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut bytes = std::fs::read(fixture(src)).unwrap();
+    patch(&mut bytes);
+    let path = dir.join(dst);
+    std::fs::write(&path, bytes).unwrap();
+    path
+}
+
+// DSF layout: fmt body starts at byte 40; channels at +12, rate at +16, block size at +32.
+fn dsf_with(dst: &str, off: usize, value: u32) -> std::path::PathBuf {
+    patched("dsd64.dsf", dst, |b| b[40 + off..40 + off + 4].copy_from_slice(&value.to_le_bytes()))
+}
+
+fn assert_rejected(path: &std::path::Path) {
+    assert!(DsdDecoder::open(path).is_err(), "{} must be rejected", path.display());
+}
+
+#[test]
+fn dsf_with_zero_rate_is_rejected() { assert_rejected(&dsf_with("rate0.dsf", 16, 0)); }
+
+#[test]
+fn dsf_with_non_dsd_rate_is_rejected() { assert_rejected(&dsf_with("rate44100.dsf", 16, 44_100)); }
+
+#[test]
+fn dsf_with_huge_block_size_is_rejected() { assert_rejected(&dsf_with("block_max.dsf", 32, 0xFFFF_FFFF)); }
+
+#[test]
+fn dsf_with_zero_channels_is_rejected() { assert_rejected(&dsf_with("ch0.dsf", 12, 0)); }
+
+// Overwrites the 8-byte big-endian size that follows the first occurrence of `id`.
+fn dff_with_size(dst: &str, id: &[u8; 4], size: u64) -> std::path::PathBuf {
+    patched("dsd64.dff", dst, |b| {
+        let at = b.windows(4).position(|w| w == id).expect("chunk id in fixture");
+        b[at + 4..at + 12].copy_from_slice(&size.to_be_bytes());
+    })
+}
+
+#[test]
+fn dff_with_short_fs_subchunk_is_rejected() { assert_rejected(&dff_with_size("fs_short.dff", b"FS  ", 2)); }
+
+#[test]
+fn dff_with_enormous_subchunk_size_is_rejected() {
+    assert_rejected(&dff_with_size("fs_huge.dff", b"FS  ", u64::MAX - 8));
+    assert_rejected(&dff_with_size("prop_huge.dff", b"PROP", u64::MAX - 8));
+}

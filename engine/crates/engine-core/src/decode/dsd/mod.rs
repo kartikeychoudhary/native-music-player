@@ -22,6 +22,19 @@ pub trait DsdSource: Send {
 
 const CHUNK: usize = 4096;
 
+/// DSD64 (2.8224 MHz) up to DSD512; anything else is rejected at open time.
+const DSD_RATES: [u32; 4] = [2_822_400, 5_644_800, 11_289_600, 22_579_200];
+const MAX_CHANNELS: u16 = 8;
+
+/// Shared header validation for the container readers.
+fn validate_format(container: &str, channels: u64, rate: u64) -> Result<(u16, u32), DecodeError> {
+    let rate = u32::try_from(rate).ok().filter(|r| DSD_RATES.contains(r))
+        .ok_or_else(|| DecodeError::Unsupported(format!("{container}: unsupported DSD rate {rate}")))?;
+    let channels = u16::try_from(channels).ok().filter(|c| (1..=MAX_CHANNELS).contains(c))
+        .ok_or_else(|| DecodeError::Unsupported(format!("{container}: unsupported channel count {channels}")))?;
+    Ok((channels, rate))
+}
+
 pub struct DsdDecoder {
     src: Box<dyn DsdSource>,
     mode: DsdOutput,

@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
-use super::DsdSource;
+use super::{validate_format, DsdSource};
 use crate::decode::DecodeError;
 
 pub struct DffReader { r: BufReader<File>, channels: u16, rate: u32, data_start: u64, total_bytes: u64, pos: u64, buf: Vec<u8> }
@@ -15,40 +15,45 @@ fn hdr<R: Read>(r: &mut R) -> io::Result<([u8; 4], u64)> {
 
 pub fn open(path: &Path) -> Result<Box<dyn DsdSource>, DecodeError> {
     let bad = |m: &str| DecodeError::Unsupported(format!("DFF: {m}"));
-    let mut r = BufReader::new(File::open(path)?);
+    let file = File::open(path)?;
+    let file_len = file.metadata()?.len();
+    let mut r = BufReader::new(file);
     let (id, _) = hdr(&mut r)?;
     let mut form = [0u8; 4];
     r.read_exact(&mut form)?;
     if &id != b"FRM8" || &form != b"DSD " { return Err(bad("not a DSDIFF file")); }
-    let (mut channels, mut rate, mut data) = (0u16, 0u32, None);
+    let (mut channels, mut rate, mut data) = (0u64, 0u64, None);
     while let Ok((id, size)) = hdr(&mut r) {
         let start = r.stream_position()?;
+        let end = start.checked_add(size).ok_or_else(|| bad("chunk size overflow"))?;
         match &id {
             b"PROP" => {
+                if end > file_len { return Err(bad("PROP chunk exceeds file")); }
                 let mut kind = [0u8; 4];
                 r.read_exact(&mut kind)?;
-                let end = start + size;
                 while r.stream_position()? + 12 <= end {
                     let (sid, ssize) = hdr(&mut r)?;
                     let sstart = r.stream_position()?;
+                    let send = sstart.checked_add(ssize).filter(|&e| e <= end).ok_or_else(|| bad("sub-chunk exceeds PROP chunk"))?;
                     let mut body = vec![0u8; ssize as usize];
                     r.read_exact(&mut body)?;
+                    let need = |n: usize| if body.len() >= n { Ok(()) } else { Err(bad("short sub-chunk")) };
                     match &sid {
-                        b"FS  " => rate = u32::from_be_bytes(body[..4].try_into().unwrap()),
-                        b"CHNL" => channels = u16::from_be_bytes(body[..2].try_into().unwrap()),
-                        b"CMPR" if &body[..4] != b"DSD " => return Err(bad("DST-compressed DSD is not supported")),
+                        b"FS  " => { need(4)?; rate = u32::from_be_bytes(body[..4].try_into().unwrap()).into(); }
+                        b"CHNL" => { need(2)?; channels = u16::from_be_bytes(body[..2].try_into().unwrap()).into(); }
+                        b"CMPR" => { need(4)?; if &body[..4] != b"DSD " { return Err(bad("DST-compressed DSD is not supported")); } }
                         _ => {}
                     }
-                    r.seek(SeekFrom::Start(sstart + ssize + (ssize & 1)))?;
+                    r.seek(SeekFrom::Start(send + (ssize & 1)))?;
                 }
             }
-            b"DSD " => { data = Some((start, size)); break; }
+            b"DSD " => { data = Some((start, size.min(file_len.saturating_sub(start)))); break; }
             _ => {}
         }
-        r.seek(SeekFrom::Start(start + size + (size & 1)))?;
+        r.seek(SeekFrom::Start(end.saturating_add(size & 1)))?;
     }
     let (data_start, len) = data.ok_or_else(|| bad("no DSD data chunk"))?;
-    if channels == 0 || rate == 0 { return Err(bad("missing FS/CHNL")); }
+    let (channels, rate) = validate_format("DFF", channels, rate)?;
     Ok(Box::new(DffReader { r, channels, rate, data_start, total_bytes: len / channels as u64, pos: 0, buf: Vec::new() }))
 }
 
