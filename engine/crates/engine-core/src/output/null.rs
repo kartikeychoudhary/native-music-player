@@ -64,6 +64,10 @@ impl NullHandle {
     pub fn recorded(&self) -> Vec<u8> { self.inner.recorded.lock().unwrap().clone() }
     pub fn clear_recorded(&self) { self.inner.recorded.lock().unwrap().clear(); }
     pub fn opened(&self) -> Vec<(OutputFormat, bool)> { self.inner.opened.lock().unwrap().clone() }
+    /// Underrun count of the currently attached stream's ring (0 when no stream is attached).
+    pub fn underruns(&self) -> u64 {
+        self.inner.source.lock().unwrap().as_ref().map_or(0, |s| s.shared().underruns.load(Relaxed))
+    }
     pub fn set_caps(&self, c: DeviceCaps) { *self.inner.caps.lock().unwrap() = c; }
     pub fn set_transport(&self, t: Transport) { *self.inner.transport.lock().unwrap() = t; }
     pub fn set_bluetooth(&self, b: Option<BluetoothInfo>) { *self.inner.bluetooth.lock().unwrap() = b; }

@@ -208,3 +208,33 @@ fn bluetooth_bit_perfect_reports_os_scope() {
     assert_eq!(sp.bit_perfect_scope, Some(BitPerfectScope::Os));
     assert_eq!(sp.bluetooth.unwrap().codec, None);
 }
+
+#[test]
+fn streams_start_without_counting_an_underrun() {
+    let (p, h, _rx) = setup(OutputMode::BitPerfect);
+    queue(&p, &["flac16_44k.flac", "flac24_96k.flac"]);
+    let start = Instant::now();
+    // Pulls before a stream's first write must not count as dropouts.
+    while h.pull(1) == 0 { assert!(start.elapsed() < Duration::from_secs(10)); }
+    assert_eq!(h.underruns(), 0, "first stream");
+    while h.opened().len() < 2 {
+        assert!(start.elapsed() < Duration::from_secs(10));
+        if h.pull(4096) == 0 { std::thread::sleep(Duration::from_micros(200)); }
+    }
+    while h.pull(1) == 0 { assert!(start.elapsed() < Duration::from_secs(10)); }
+    assert_eq!(h.underruns(), 0, "reopened stream");
+}
+
+#[test]
+fn exclusive_denial_is_sticky_and_keeps_gapless() {
+    let (p, h, rx) = setup(OutputMode::BitPerfect);
+    h.set_fail_exclusive(true);
+    queue(&p, &["gap_a.flac", "gap_b.flac"]);
+    let events = run_to_end(&h, &rx);
+    assert_eq!(h.opened().len(), 1);
+    assert!(!h.opened()[0].1);
+    assert_eq!(f32s(&h.recorded()), read_f32le("gap_src.f32le"));
+    let paths: Vec<_> = events.iter().filter_map(|e| if let PlayerEvent::SignalPath(s) = e { Some(s) } else { None }).collect();
+    assert!(paths.len() >= 2, "{paths:?}");
+    assert!(paths.iter().all(|s| s.notes.iter().any(|n| n.contains("Exclusive access denied (device busy)"))), "{paths:?}");
+}

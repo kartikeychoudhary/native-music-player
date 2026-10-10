@@ -95,7 +95,8 @@ struct Feeding { idx: usize, dec: Box<dyn TrackDecoder>, chain: ProcessChain, de
 struct Marker { start: u64, idx: usize, start_ms: u64, out_rate: u32, signal: SignalPath, duration_ms: Option<u64> }
 
 /// A track waiting for the ring to drain before the stream is reopened in its format.
-struct Reopen { idx: usize, dec: Box<dyn TrackDecoder>, plan: PipelinePlan }
+/// `prev` is the format of the stream being replaced (for the gap note).
+struct Reopen { idx: usize, dec: Box<dyn TrackDecoder>, plan: PipelinePlan, prev: Option<OutputFormat> }
 
 struct Player {
     backend: Arc<dyn OutputBackend>,
@@ -116,6 +117,12 @@ struct Player {
     prepare_failed: Option<usize>,
     markers: VecDeque<Marker>,
     reopen: Option<Reopen>,
+    /// A freshly opened stream waits for its first data before `playing` is set, so the callback
+    /// never sees an empty ring that counts as an underrun.
+    pending_start: bool,
+    /// Why exclusive access was denied on this device. While set, every plan is shared; it is
+    /// cleared on SetMode, SetDevice and device loss.
+    exclusive_denied: Option<String>,
     end_pending: bool,
     shown_idx: Option<usize>,
     resume_ms: Option<u64>,
@@ -139,7 +146,7 @@ impl Player {
         Self {
             backend, events, shared_state, queue: vec![], next_id: 1, cur: 0, status: PlaybackStatus::Stopped,
             volume: 1.0, mode: OutputMode::Processed, device: None, active: None, feeding: None, prepared: None,
-            prepare_failed: None, markers: VecDeque::new(), reopen: None, end_pending: false, shown_idx: None, resume_ms: None,
+            prepare_failed: None, markers: VecDeque::new(), reopen: None, pending_start: false, exclusive_denied: None, end_pending: false, shown_idx: None, resume_ms: None,
             last_tick: Instant::now(), last_underruns: (0, Instant::now()), last_devices: (devices, Instant::now()),
             buffer_secs: cfg.buffer_secs, underrun_times: VecDeque::new(), cfg,
         }
@@ -195,8 +202,8 @@ impl Player {
                 }
                 self.publish(true);
             }
-            Command::SetMode(m) => { self.mode = m; self.restart_if_active(); self.publish(true); }
-            Command::SetDevice(d) => { self.device = d; self.restart_if_active(); self.publish(true); }
+            Command::SetMode(m) => { self.mode = m; self.exclusive_denied = None; self.restart_if_active(); self.publish(true); }
+            Command::SetDevice(d) => { self.device = d; self.exclusive_denied = None; self.restart_if_active(); self.publish(true); }
             Command::Shutdown => {}
         }
     }
@@ -221,7 +228,8 @@ impl Player {
             self.start_at(self.cur, ms);
             return;
         }
-        if let Some(a) = &self.active { a.shared.playing.store(true, Release); }
+        // A stream still waiting for its first data is released by `pump`.
+        if !self.pending_start && let Some(a) = &self.active { a.shared.playing.store(true, Release); }
         self.status = PlaybackStatus::Playing;
         self.publish(true);
     }
@@ -232,6 +240,7 @@ impl Player {
         self.prepared = None;
         self.prepare_failed = None;
         self.reopen = None;
+        self.pending_start = false;
         self.markers.clear();
         self.end_pending = false;
         self.shown_idx = None;
@@ -252,15 +261,21 @@ impl Player {
         found.map_or(Transport::Other, |d| d.transport)
     }
 
-    fn plan_for(&self, dec: &mut dyn TrackDecoder, current: Option<(OutputFormat, bool)>, force_shared: bool) -> PipelinePlan {
+    /// Plans `dec` for the current mode and device. Once exclusive access has been denied, plans
+    /// are shared (processed) and carry the denial note, so gapless continuation still matches.
+    fn plan_for(&self, dec: &mut dyn TrackDecoder, current: Option<(OutputFormat, bool)>) -> PipelinePlan {
         let dev = self.device.as_deref();
+        let force_shared = self.exclusive_denied.is_some();
         let shared = self.backend.caps(dev, false).unwrap_or_else(|_| DeviceCaps::fallback());
         let exclusive = (self.mode == OutputMode::BitPerfect && !force_shared).then(|| self.backend.caps(dev, true).ok()).flatten();
         let spec = dec.info().spec;
-        let plan = plan_output(&PlanInput {
+        let mut plan = plan_output(&PlanInput {
             source: &spec, dsd_rate: dec.info().dsd_rate, mode: if force_shared { OutputMode::Processed } else { self.mode },
             transport: self.device_transport(), shared_caps: &shared, exclusive_caps: exclusive.as_ref(), current,
         });
+        if let Some(reason) = &self.exclusive_denied {
+            plan.notes.push(format!("Exclusive access denied ({reason}) — using shared mode"));
+        }
         if let Some(out) = plan.dsd { dec.set_dsd_output(out); }
         plan
     }
@@ -274,17 +289,21 @@ impl Player {
         stream.start()?;
         let info = stream.info().clone();
         self.active = Some(Active { _stream: stream, prod, shared, info, written_bytes: 0, carry: vec![], carry_pos: 0 });
+        // Underrun reporting compares against the new ring's counter, which starts at 0.
+        self.last_underruns.0 = 0;
         Ok(())
     }
 
-    /// Opens a stream for `plan`; if exclusive access is denied, re-plans in shared mode with a note.
-    /// Returns the plan actually used.
+    /// Opens a stream for `plan`. If exclusive access is denied, remembers the denial (sticky) and
+    /// re-plans in shared mode, which adds the denial note. Returns the plan actually used.
+    /// The planner's notes for the failed exclusive plan describe that plan, so they aren't carried;
+    /// player notes (the reopen gap note) are added by the caller to the returned plan.
     fn open_stream_with_fallback(&mut self, dec: &mut dyn TrackDecoder, plan: PipelinePlan) -> Result<PipelinePlan, OutputError> {
         match self.open_stream(&plan) {
             Ok(()) => Ok(plan),
             Err(OutputError::ExclusiveDenied(reason)) if plan.exclusive => {
-                let mut shared = self.plan_for(dec, None, true);
-                shared.notes.push(format!("Exclusive access denied ({reason}) — using shared mode"));
+                self.exclusive_denied = Some(reason);
+                let shared = self.plan_for(dec, None);
                 self.open_stream(&shared)?;
                 Ok(shared)
             }
@@ -306,12 +325,12 @@ impl Player {
                 if dec.info().total_frames.is_some_and(|t| frame >= t) { idx += 1; ms = 0; continue; }
                 if let Err(e) = dec.seek(frame) { self.track_error(idx, &e); idx += 1; ms = 0; continue; }
             }
-            let plan = self.plan_for(dec.as_mut(), None, false);
+            let plan = self.plan_for(dec.as_mut(), None);
             let plan = match self.open_stream_with_fallback(dec.as_mut(), plan) { Ok(p) => p, Err(e) => { self.output_error(&e); return; } };
             self.begin_feeding(idx, dec, plan, ms, None);
             self.cur = idx;
             self.status = PlaybackStatus::Playing;
-            if let Some(a) = &self.active { a.shared.playing.store(true, Release); }
+            self.pending_start = true;
             self.publish(true);
             return;
         }
@@ -332,9 +351,28 @@ impl Player {
     // ---------- feeding ----------
 
     fn pump(&mut self) {
+        self.pump_blocks();
+        self.release_pending_start();
+    }
+
+    /// Starts a new stream's callback once data beyond any seek discard point is in its ring. Runs
+    /// at the end of a pump pass, so the ring holds a whole pass of prefill, not a single block.
+    fn release_pending_start(&mut self) {
+        if !self.pending_start || self.status != PlaybackStatus::Playing { return; }
+        let Some(a) = &self.active else { return };
+        if a.written_frames() > a.shared.discard_to.load(Acquire) {
+            a.shared.playing.store(true, Release);
+            self.pending_start = false;
+        }
+    }
+
+    fn pump_blocks(&mut self) {
         for _ in 0..64 {
             if !self.flush_carry() { return; }
-            if self.reopen.is_some() { self.try_reopen(); return; }
+            if self.reopen.is_some() {
+                if !self.try_reopen() { return; }
+                continue;
+            }
             let Some(feed) = self.feeding.as_mut() else { self.check_drained(); return; };
             if feed.eof { self.advance(); continue; }
             if self.active.as_ref().map_or(0, |a| a.prod.slots()) < MIN_FREE_BYTES { return; }
@@ -411,7 +449,7 @@ impl Player {
             }
             let mut dec = match self.open_decoder(idx) { Ok(d) => d, Err(e) => { self.track_error(idx, &e); idx += 1; continue; } };
             let current = self.active.as_ref().map(|a| (a.info.format, a.exclusive()));
-            let mut plan = self.plan_for(dec.as_mut(), current, false);
+            let plan = self.plan_for(dec.as_mut(), current);
             let same = current.is_some_and(|(f, ex)| f == plan.format && ex == plan.exclusive);
             if same {
                 // Gapless: hand the resampler (and its buffered latency) on; never flush here.
@@ -421,10 +459,8 @@ impl Player {
                 let mut tail = vec![];
                 feed.chain.flush(&mut tail);
                 self.push_bytes(tail);
-                let rate_changed = current.is_some_and(|(f, _)| f.sample_rate != plan.format.sample_rate);
-                plan.notes.push(if rate_changed { "Rate change: brief gap" } else { "Format change: brief gap" }.into());
                 if let Some(a) = &self.active { a.shared.draining.store(true, Release); }
-                self.reopen = Some(Reopen { idx, dec, plan });
+                self.reopen = Some(Reopen { idx, dec, plan, prev: current.map(|(f, _)| f) });
             }
             return;
         }
@@ -434,15 +470,20 @@ impl Player {
         self.active.as_ref().is_none_or(|a| a.carry_pos == a.carry.len() && a.shared.consumed_frames.load(Acquire) >= a.written_frames())
     }
 
-    fn try_reopen(&mut self) {
-        if !self.drained() { return; }
+    /// Once the old ring has drained, reopens the stream for the pending track. Returns true when
+    /// the new stream is open and feeding can continue.
+    fn try_reopen(&mut self) -> bool {
+        if !self.drained() { return false; }
         self.update_position();
-        let Reopen { idx, mut dec, plan } = self.reopen.take().unwrap();
+        let Reopen { idx, mut dec, plan, prev } = self.reopen.take().unwrap();
         self.active = None;
         self.markers.clear();
-        let plan = match self.open_stream_with_fallback(dec.as_mut(), plan) { Ok(p) => p, Err(e) => { self.output_error(&e); return; } };
+        let mut plan = match self.open_stream_with_fallback(dec.as_mut(), plan) { Ok(p) => p, Err(e) => { self.output_error(&e); return false; } };
+        let rate_changed = prev.is_some_and(|f| f.sample_rate != plan.format.sample_rate);
+        plan.notes.push(if rate_changed { "Rate change: brief gap" } else { "Format change: brief gap" }.into());
         self.begin_feeding(idx, dec, plan, 0, None);
-        if let Some(a) = &self.active { a.shared.playing.store(true, Release); }
+        self.pending_start = true;
+        true
     }
 
     fn check_drained(&mut self) {
@@ -484,7 +525,7 @@ impl Player {
         if dec.info().total_frames.is_some_and(|t| frame >= t) { return self.start_at(idx + 1, 0); }
         if let Err(e) = dec.seek(frame) { self.track_error(idx, &e); return self.start_at(idx + 1, 0); }
         let current = self.active.as_ref().map(|a| (a.info.format, a.exclusive()));
-        let plan = self.plan_for(dec.as_mut(), current, false);
+        let plan = self.plan_for(dec.as_mut(), current);
         if current.is_some_and(|(f, ex)| f != plan.format || ex != plan.exclusive) { return self.start_at(idx, ms); }
         self.begin_feeding(idx, dec, plan, ms, None);
         self.cur = idx;
@@ -583,6 +624,7 @@ impl Player {
             self.cur = idx;
             self.resume_ms = Some(ms);
             self.device = None;
+            self.exclusive_denied = None;
             self.status = PlaybackStatus::Paused;
             let code = ErrorCode::DeviceUnavailable;
             let _ = self.events.send(PlayerEvent::Error(EngineErrorEvent { code: code.code(), name: code.name().into(), message: "Output device disconnected; switched to the system default".into(), path: None }));
