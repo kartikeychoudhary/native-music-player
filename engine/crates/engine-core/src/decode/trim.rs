@@ -28,9 +28,11 @@ impl Trimmer {
 
     /// `target` and `landed` are positions in trimmed (user-visible) frames. The decoder has been
     /// repositioned so the next decoded frame is `landed + delay` in raw coordinates.
+    /// Frames skipped to reach `target` count against the valid length, so `remaining` is
+    /// measured from `target`, not `landed`.
     pub fn seek_to(&mut self, target: u64, landed: u64) {
         self.skip = target.saturating_sub(landed);
-        self.remaining = self.valid.map(|v| v.saturating_sub(landed));
+        self.remaining = self.valid.map(|v| v.saturating_sub(target));
     }
 }
 
@@ -74,7 +76,31 @@ mod tests {
         assert_eq!(a.frames(), 44);
         let mut b = block(1000);
         t.apply(&mut b);
-        assert_eq!(b.frames(), 1000 - 480 - 44); // remaining valid frames after landing
+        assert_eq!(b.frames(), 1000 - 500 - 44); // total emitted after seek = valid - target = 500
+    }
+
+    #[test]
+    fn seek_landing_exactly_on_target_has_no_skip() {
+        let mut t = Trimmer::new(100, Some(1000));
+        t.seek_to(500, 500);
+        let mut a = block(1000);
+        t.apply(&mut a);
+        assert_eq!(a.frames(), 500); // remaining = valid - target
+        let mut b = block(1000);
+        t.apply(&mut b);
+        assert!(b.is_empty());
+    }
+
+    #[test]
+    fn seek_past_valid_length_emits_nothing() {
+        let mut t = Trimmer::new(100, Some(1000));
+        t.seek_to(1200, 480); // target beyond the end of the valid region
+        let mut a = block(64);
+        t.apply(&mut a);
+        assert!(a.is_empty());
+        let mut b = block(1000);
+        t.apply(&mut b);
+        assert!(b.is_empty());
     }
 
     #[test]
