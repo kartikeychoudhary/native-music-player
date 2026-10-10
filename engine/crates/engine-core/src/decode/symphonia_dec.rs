@@ -252,8 +252,8 @@ impl SymphoniaDecoder {
                 Err(e) => return Err(map_sym_err(e)),
             };
             block.trim(trim_start, trim_end);
-            if !self.saw_packet_trim {
-                if let Some(t) = self.trimmer.as_mut() { t.apply(&mut block); }
+            if !self.saw_packet_trim && let Some(t) = self.trimmer.as_mut() {
+                t.apply(&mut block);
             }
             if self.skip > 0 {
                 let n = (self.skip as usize).min(block.frames());

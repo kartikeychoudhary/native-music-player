@@ -88,7 +88,7 @@ fn edit_list_gapless(e: AudioEdit, movie_ts: u32) -> Option<Mp4Gapless> {
     if e.media_ts == 0 || movie_ts == 0 { return None; }
     let (ts, mts) = (movie_ts as u64, e.media_ts as u64);
     let elst_valid = (e.movie_dur as u128 * mts as u128 / ts as u128) as u64;
-    let tick = (mts + ts - 1) / ts;
+    let tick = mts.div_ceil(ts);
     let duration = match e.media_dur.checked_sub(e.media_time) {
         Some(exact) if exact > 0 && exact.abs_diff(elst_valid) <= tick => exact,
         _ => elst_valid,
@@ -143,10 +143,8 @@ fn read_gapless<R: Read + Seek>(r: &mut R) -> io::Result<Option<Mp4Gapless>> {
                     }
                     Ok(())
                 })?;
-                if is_audio && audio_elst.is_none() {
-                    if let Some((media_time, movie_dur)) = edit {
-                        audio_elst = Some(AudioEdit { media_time, movie_dur, media_ts, media_dur });
-                    }
+                if is_audio && audio_elst.is_none() && let Some((media_time, movie_dur)) = edit {
+                    audio_elst = Some(AudioEdit { media_time, movie_dur, media_ts, media_dur });
                 }
             }
             b"udta" => smpb = find_itunsmpb(r, h)?,
@@ -197,8 +195,8 @@ fn find_itunsmpb<R: Read + Seek>(r: &mut R, udta: &BoxHdr) -> io::Result<Option<
                 })?;
                 // Only the data of an iTunSMPB item is read, and only if it is a sane size.
                 let name = match name_span { Some(s) => read_text(r, s, 4)?, None => String::new() };
-                if name == "iTunSMPB" {
-                    if let Some(s) = data_span { found = parse_itunsmpb(&read_text(r, s, 8)?); }
+                if name == "iTunSMPB" && let Some(s) = data_span {
+                    found = parse_itunsmpb(&read_text(r, s, 8)?);
                 }
                 Ok(())
             })

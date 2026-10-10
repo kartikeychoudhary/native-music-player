@@ -46,14 +46,41 @@ fn preroll_for(codec: protocol::Codec) -> u64 {
 
 fn fdk_err(e: DecoderError) -> DecodeError { DecodeError::Corrupt(e.message().to_string()) }
 
-/// Byte ranges of every ADTS frame (sync 0xFFF, 13-bit frame_length).
+/// Length of a leading ID3v2 tag (header, body and optional footer), 0 if there is none.
+fn id3v2_len(data: &[u8]) -> usize {
+    if data.len() >= 10 && &data[..3] == b"ID3" && data[6..10].iter().all(|&b| b & 0x80 == 0) {
+        let size = data[6..10].iter().fold(0usize, |n, &b| (n << 7) | b as usize);
+        let footer = if data[5] & 0x10 != 0 { 10 } else { 0 };
+        (10 + size + footer).min(data.len())
+    } else {
+        0
+    }
+}
+
+/// Frame length of a plausible ADTS header at `i`: sync 0xFFF, layer 0, sampling-frequency index
+/// below 13, and a 13-bit frame_length of at least the header size (7, or 9 with a CRC).
+fn adts_header_len(data: &[u8], i: usize) -> Option<usize> {
+    let h = data.get(i..i + 7)?;
+    if h[0] != 0xFF || h[1] & 0xF6 != 0xF0 || (h[2] >> 2) & 0x0F >= 13 { return None; }
+    let len = (((h[3] & 0x03) as usize) << 11) | ((h[4] as usize) << 3) | ((h[5] as usize) >> 5);
+    let header = if h[1] & 1 == 1 { 7 } else { 9 };
+    (len >= header).then_some(len)
+}
+
+/// Byte ranges of every ADTS frame. Raw `.aac` files may start with an ID3v2 tag, and 0xFFF can
+/// occur by chance in tag or payload bytes, so a candidate frame is accepted only when it is
+/// followed by another valid header, ends exactly at EOF, or is followed by a trailing tag.
 fn scan_adts(data: &[u8]) -> Vec<(usize, usize)> {
     let mut out = vec![];
-    let mut i = 0;
+    let mut i = id3v2_len(data);
     while i + 7 <= data.len() {
-        if data[i] == 0xFF && data[i + 1] & 0xF0 == 0xF0 {
-            let len = (((data[i + 3] & 0x03) as usize) << 11) | ((data[i + 4] as usize) << 3) | ((data[i + 5] as usize) >> 5);
-            if len >= 7 && i + len <= data.len() { out.push((i, len)); i += len; continue; }
+        if let Some(len) = adts_header_len(data, i) {
+            let end = i + len;
+            let rest = &data[end.min(data.len())..];
+            let followed = adts_header_len(data, end).is_some()
+                || (end == data.len())
+                || (end < data.len() && (rest.starts_with(b"TAG") || rest.starts_with(b"ID3") || rest.starts_with(b"APETAGEX")));
+            if end <= data.len() && followed { out.push((i, len)); i = end; continue; }
         }
         i += 1;
     }
@@ -251,5 +278,64 @@ impl TrackDecoder for FdkAacDecoder {
             }
         }
         Ok(frame)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A syntactically valid ADTS frame (MPEG-4, LC, 24 kHz, stereo, no CRC) of `len` bytes.
+    fn frame(len: usize) -> Vec<u8> {
+        let mut f = vec![0u8; len];
+        f[0] = 0xFF;
+        f[1] = 0xF1;
+        f[2] = 0x58;
+        f[3] = 0x80 | ((len >> 11) & 3) as u8;
+        f[4] = (len >> 3) as u8;
+        f[5] = ((len & 7) << 5) as u8 | 0x1F;
+        f[6] = 0xFC;
+        f
+    }
+
+    #[test]
+    fn scans_consecutive_frames() {
+        let data: Vec<u8> = [frame(100), frame(200), frame(50)].concat();
+        assert_eq!(scan_adts(&data), vec![(0, 100), (100, 200), (300, 50)]);
+    }
+
+    #[test]
+    fn rejects_false_sync_in_random_data() {
+        // A false 0xFF 0xF1 whose 13-bit length points at nothing that looks like a frame.
+        let mut junk = vec![0x11u8; 300];
+        junk[40..47].copy_from_slice(&[0xFF, 0xF1, 0x58, 0x80, 0x0C, 0x80, 0xFC]); // claims len 100
+        let data: Vec<u8> = [junk, frame(120), frame(120)].concat();
+        assert_eq!(scan_adts(&data), vec![(300, 120), (420, 120)]);
+    }
+
+    #[test]
+    fn rejects_bad_layer_and_sample_rate_index() {
+        let mut bad_layer = frame(64);
+        bad_layer[1] |= 0x02;
+        let mut bad_rate = frame(64);
+        bad_rate[2] = (bad_rate[2] & !0x3C) | (13 << 2);
+        assert!(scan_adts(&[bad_layer.clone(), bad_layer].concat()).is_empty());
+        assert!(scan_adts(&[bad_rate.clone(), bad_rate].concat()).is_empty());
+    }
+
+    #[test]
+    fn skips_leading_id3v2_tag_with_footer() {
+        let mut tag = b"ID3\x04\x00\x10\x00\x00\x01\x00".to_vec(); // size 128, footer flag
+        tag.extend(std::iter::repeat_n(0xFFu8, 128 + 10)); // payload full of sync-looking bytes
+        let data: Vec<u8> = [tag, frame(80), frame(80)].concat();
+        let start = 10 + 128 + 10;
+        assert_eq!(scan_adts(&data), vec![(start, 80), (start + 80, 80)]);
+    }
+
+    #[test]
+    fn truncated_trailing_frame_is_dropped() {
+        let mut data: Vec<u8> = [frame(100), frame(100)].concat();
+        data.truncate(150);
+        assert_eq!(scan_adts(&data), vec![(0, 100)]);
     }
 }

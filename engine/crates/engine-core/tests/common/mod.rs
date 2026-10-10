@@ -8,11 +8,11 @@ pub fn fixture(name: &str) -> PathBuf {
 }
 
 pub fn read_s32le(name: &str) -> Vec<i32> {
-    std::fs::read(fixture(name)).unwrap().chunks_exact(4).map(|c| i32::from_le_bytes(c.try_into().unwrap())).collect()
+    std::fs::read(fixture(name)).unwrap().as_chunks::<4>().0.iter().map(|c| i32::from_le_bytes(*c)).collect()
 }
 
 pub fn read_f32le(name: &str) -> Vec<f32> {
-    std::fs::read(fixture(name)).unwrap().chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect()
+    std::fs::read(fixture(name)).unwrap().as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect()
 }
 
 /// Frequency of the strongest bin (Goertzel scan, 10 Hz steps 20 Hz–20 kHz) of one channel.

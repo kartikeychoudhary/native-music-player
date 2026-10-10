@@ -74,3 +74,35 @@ fn raw_adts_v2_is_detected_and_decodes_every_frame() {
     // fdk buffers a few ADTS frames before it starts emitting; they must be drained at EOF.
     assert_eq!(drain(&mut d).len() as u64 / 2, total);
 }
+
+#[test]
+fn raw_adts_with_leading_id3v2_tag_matches_untagged() {
+    let plain_path = fixture("he_aac.aac");
+    let mut tagged = Vec::new();
+    // ID3v2.4 header, ~20 KB payload (syncsafe size) of deterministic pseudo-random bytes with
+    // plenty of embedded 0xFF 0xF1 pairs that look like ADTS syncs.
+    let payload = 20_000usize;
+    tagged.extend_from_slice(b"ID3\x04\x00\x00");
+    tagged.extend_from_slice(&[0, 0, ((payload >> 7) & 0x7F) as u8, (payload & 0x7F) as u8]);
+    let mut x: u32 = 0x1234_5678;
+    for i in 0..payload {
+        x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        if i % 500 == 100 { tagged.extend_from_slice(&[0xFF, 0xF1]); } else { tagged.push((x >> 24) as u8); }
+    }
+    tagged.truncate(10 + payload);
+    tagged.extend(std::fs::read(&plain_path).unwrap());
+    let path = std::env::temp_dir().join(format!("aurora_he_aac_tagged_{}.aac", std::process::id()));
+    std::fs::write(&path, &tagged).unwrap();
+
+    let mut plain = FdkAacDecoder::open_adts(&plain_path).unwrap();
+    let mut with_tag = FdkAacDecoder::open_adts(&path).unwrap();
+    assert_eq!(with_tag.info().total_frames, plain.info().total_frames);
+    assert_eq!(with_tag.info().codec, plain.info().codec);
+    assert_eq!(with_tag.info().spec, plain.info().spec);
+    let a = drain(&mut plain);
+    let b = drain(&mut with_tag);
+    std::fs::remove_file(&path).ok();
+    assert_eq!(b.len(), a.len());
+    let snr = snr_db(&a, &b);
+    assert!(snr >= 60.0, "tagged decode SNR {snr:.1} dB");
+}

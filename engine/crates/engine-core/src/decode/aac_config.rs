@@ -49,12 +49,10 @@ pub fn parse_asc(asc: &[u8]) -> Option<AacConfig> {
         if aot == 6 || aot == 20 { b.get(3)?; }
         if ext_flag == 1 && matches!(aot, 17 | 19..=23) { b.get(3)?; }
         // Backward-compatible (implicit) signaling via sync extensions.
-        if !sbr && b.left() >= 16 && b.get(11)? == 0x2B7 {
-            if b.aot()? == 5 && b.get(1)? == 1 {
-                sbr = true;
-                ext_rate = Some(b.rate()?);
-                if b.left() >= 12 && b.get(11)? == 0x548 { ps = b.get(1)? == 1; }
-            }
+        if !sbr && b.left() >= 16 && b.get(11)? == 0x2B7 && b.aot()? == 5 && b.get(1)? == 1 {
+            sbr = true;
+            ext_rate = Some(b.rate()?);
+            if b.left() >= 12 && b.get(11)? == 0x548 { ps = b.get(1)? == 1; }
         }
     }
     let output_rate = ext_rate.unwrap_or(if sbr { sample_rate * 2 } else { sample_rate });
