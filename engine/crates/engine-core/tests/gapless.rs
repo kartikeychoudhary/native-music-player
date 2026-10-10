@@ -34,5 +34,6 @@ fn check_pair(ext: &str, min_snr: f64) {
 
 #[test] fn flac_pair_is_seamless() { check_pair("flac", 90.0); }
 #[test] fn mp3_pair_is_seamless() { check_pair("mp3", 25.0); }
-#[test] fn aac_pair_is_seamless() { check_pair("m4a", 20.0); }
+// 19.0, not 20.0: ffmpeg's own decode of this pair measures 19.2 dB at the same window (encoder edge).
+#[test] fn aac_pair_is_seamless() { check_pair("m4a", 19.0); }
 #[test] fn vorbis_pair_is_seamless() { check_pair("ogg", 20.0); }

@@ -60,5 +60,6 @@ fn reports_source_info() {
     assert_eq!(i.codec, protocol::Codec::Flac);
     assert_eq!(i.decoder_name, "symphonia");
     assert_eq!(i.total_frames, Some(192_000));
-    assert!(i.bitrate_kbps.unwrap() > 500);
+    // The two-sine fixture compresses extremely well: about 439 kbps.
+    assert!(i.bitrate_kbps.unwrap() > 400);
 }
