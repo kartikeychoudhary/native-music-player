@@ -1,4 +1,7 @@
+pub mod aac_config;
 pub mod dsd;
+#[cfg(feature = "fdk-aac")]
+pub mod fdk_dec;
 pub mod mp4_gapless;
 pub mod opus_dec;
 pub mod symphonia_dec;
