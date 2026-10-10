@@ -1,0 +1,74 @@
+use std::fs::File;
+use std::io::{self, BufReader, Read, Seek, SeekFrom};
+use std::path::Path;
+
+use super::DsdSource;
+use crate::decode::DecodeError;
+
+pub struct DffReader { r: BufReader<File>, channels: u16, rate: u32, data_start: u64, total_bytes: u64, pos: u64, buf: Vec<u8> }
+
+fn hdr<R: Read>(r: &mut R) -> io::Result<([u8; 4], u64)> {
+    let mut b = [0u8; 12];
+    r.read_exact(&mut b)?;
+    Ok((b[0..4].try_into().unwrap(), u64::from_be_bytes(b[4..12].try_into().unwrap())))
+}
+
+pub fn open(path: &Path) -> Result<Box<dyn DsdSource>, DecodeError> {
+    let bad = |m: &str| DecodeError::Unsupported(format!("DFF: {m}"));
+    let mut r = BufReader::new(File::open(path)?);
+    let (id, _) = hdr(&mut r)?;
+    let mut form = [0u8; 4];
+    r.read_exact(&mut form)?;
+    if &id != b"FRM8" || &form != b"DSD " { return Err(bad("not a DSDIFF file")); }
+    let (mut channels, mut rate, mut data) = (0u16, 0u32, None);
+    while let Ok((id, size)) = hdr(&mut r) {
+        let start = r.stream_position()?;
+        match &id {
+            b"PROP" => {
+                let mut kind = [0u8; 4];
+                r.read_exact(&mut kind)?;
+                let end = start + size;
+                while r.stream_position()? + 12 <= end {
+                    let (sid, ssize) = hdr(&mut r)?;
+                    let sstart = r.stream_position()?;
+                    let mut body = vec![0u8; ssize as usize];
+                    r.read_exact(&mut body)?;
+                    match &sid {
+                        b"FS  " => rate = u32::from_be_bytes(body[..4].try_into().unwrap()),
+                        b"CHNL" => channels = u16::from_be_bytes(body[..2].try_into().unwrap()),
+                        b"CMPR" if &body[..4] != b"DSD " => return Err(bad("DST-compressed DSD is not supported")),
+                        _ => {}
+                    }
+                    r.seek(SeekFrom::Start(sstart + ssize + (ssize & 1)))?;
+                }
+            }
+            b"DSD " => { data = Some((start, size)); break; }
+            _ => {}
+        }
+        r.seek(SeekFrom::Start(start + size + (size & 1)))?;
+    }
+    let (data_start, len) = data.ok_or_else(|| bad("no DSD data chunk"))?;
+    if channels == 0 || rate == 0 { return Err(bad("missing FS/CHNL")); }
+    Ok(Box::new(DffReader { r, channels, rate, data_start, total_bytes: len / channels as u64, pos: 0, buf: Vec::new() }))
+}
+
+impl DsdSource for DffReader {
+    fn channels(&self) -> u16 { self.channels }
+    fn dsd_rate(&self) -> u32 { self.rate }
+    fn total_bytes_per_channel(&self) -> u64 { self.total_bytes }
+
+    fn read(&mut self, out: &mut [Vec<u8>], max: usize) -> io::Result<usize> {
+        out.iter_mut().for_each(Vec::clear);
+        let n = (max as u64).min(self.total_bytes - self.pos) as usize;
+        if n == 0 { return Ok(0); }
+        let ch = self.channels as usize;
+        self.r.seek(SeekFrom::Start(self.data_start + self.pos * ch as u64))?;
+        self.buf.resize(n * ch, 0);
+        self.r.read_exact(&mut self.buf)?;
+        for (c, o) in out.iter_mut().enumerate() { o.extend(self.buf.iter().skip(c).step_by(ch)); }
+        self.pos += n as u64;
+        Ok(n)
+    }
+
+    fn seek_byte(&mut self, byte: u64) -> io::Result<()> { self.pos = byte.min(self.total_bytes); Ok(()) }
+}
