@@ -34,6 +34,14 @@ impl Trimmer {
         self.skip = target.saturating_sub(landed);
         self.remaining = self.valid.map(|v| v.saturating_sub(target));
     }
+
+    /// Like `seek_to`, but the caller supplies the number of raw frames to discard from the
+    /// repositioned decoder (pre-roll plus any priming it landed inside); `target` is the
+    /// user-visible frame the stream resumes at, so `remaining` is measured from it.
+    pub fn seek_raw(&mut self, skip: u64, target: u64) {
+        self.skip = skip;
+        self.remaining = self.valid.map(|v| v.saturating_sub(target));
+    }
 }
 
 #[cfg(test)]
@@ -46,6 +54,21 @@ mod tests {
             spec: PcmSpec { sample_rate: 44100, channels: 2, kind: SampleKind::Int { bits: 16 } },
             data: PcmData::Int((0..frames as i32 * 2).collect()),
         }
+    }
+
+    #[test]
+    fn seek_raw_skips_given_frames_and_measures_remaining_from_target() {
+        let mut t = Trimmer::new(1500, Some(2000));
+        t.seek_raw(1100, 500);
+        let mut a = block(1024);
+        t.apply(&mut a);
+        assert_eq!(a.frames(), 0);
+        let mut b = block(1024);
+        t.apply(&mut b);
+        assert_eq!(b.frames(), 1024 - 76); // 2048 - 1100 skipped = 948 left
+        let mut c = block(1024);
+        t.apply(&mut c);
+        assert_eq!(c.frames(), 1500 - 948); // remaining 2000 - 500 = 1500 in total
     }
 
     #[test]

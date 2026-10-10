@@ -19,6 +19,9 @@ use super::{DecodeError, GaplessInfo, SourceInfo, TrackDecoder};
 use crate::pcm::{PcmBlock, PcmData, PcmSpec, SampleKind};
 use protocol::Codec;
 
+/// Raw frames to decode and discard before a seek target on the MP4 path (two AAC frames).
+const SEEK_PREROLL: u64 = 2048;
+
 pub struct Probed {
     pub format: Box<dyn FormatReader>,
     pub track_id: u32,
@@ -263,6 +266,17 @@ impl SymphoniaDecoder {
     }
 }
 
+impl SymphoniaDecoder {
+    fn seek_ts(&mut self, ts: u64) -> Result<symphonia::core::formats::SeekedTo, DecodeError> {
+        let seeked = self
+            .format
+            .seek(SeekMode::Accurate, SeekTo::Timestamp { ts: Timestamp::new(ts as i64), track_id: self.track_id })
+            .map_err(map_sym_err)?;
+        self.decoder.reset();
+        Ok(seeked)
+    }
+}
+
 impl TrackDecoder for SymphoniaDecoder {
     fn info(&self) -> &SourceInfo { &self.info }
 
@@ -275,19 +289,20 @@ impl TrackDecoder for SymphoniaDecoder {
         self.pending = None;
         self.held = None;
         let use_trimmer = self.trimmer.is_some() && !self.saw_packet_trim;
-        let delay = if use_trimmer { self.mp4_delay } else { 0 };
-        let ts = units_of(frame + delay, self.tb, self.rate);
-        let seeked = self
-            .format
-            .seek(SeekMode::Accurate, SeekTo::Timestamp { ts: Timestamp::new(ts as i64), track_id: self.track_id })
-            .map_err(map_sym_err)?;
-        self.decoder.reset();
-        let landed_raw = frames_of(seeked.actual_ts.get().max(0) as u64, self.tb, self.rate);
-        let landed = landed_raw.saturating_sub(delay).min(frame);
         if use_trimmer {
-            if let Some(t) = self.trimmer.as_mut() { t.seek_to(frame, landed); }
+            // MP4: work in raw (untrimmed) coordinates. Land a couple of packets early so the
+            // decoder's overlap state is warm (a reset AAC decoder distorts its first frame), and
+            // so a landing inside the priming region still skips exactly the right frames.
+            let target_raw = frame + self.mp4_delay;
+            let ts = units_of(target_raw.saturating_sub(SEEK_PREROLL), self.tb, self.rate);
+            let seeked = self.seek_ts(ts)?;
+            let landed_raw = frames_of(seeked.actual_ts.get().max(0) as u64, self.tb, self.rate);
+            let skip = target_raw - landed_raw.min(target_raw);
+            if let Some(t) = self.trimmer.as_mut() { t.seek_raw(skip, frame); }
             self.skip = 0;
         } else {
+            let seeked = self.seek_ts(units_of(frame, self.tb, self.rate))?;
+            let landed = frames_of(seeked.actual_ts.get().max(0) as u64, self.tb, self.rate).min(frame);
             self.skip = frame - landed;
         }
         Ok(frame)
