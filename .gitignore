@@ -18,3 +18,7 @@ fixtures/out/
 Thumbs.db
 .vscode/
 .idea/
+
+# Playwright
+test-results/
+playwright-report/
