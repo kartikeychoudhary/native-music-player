@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/protocol", "crates/engine-core", "crates/aurora-engine", "crates/fixtures-gen"]
+members = ["crates/protocol", "crates/engine-core", "crates/aurora-engine", "crates/fixtures-gen", "crates/library"]
 
 [workspace.package]
 edition = "2024"
@@ -27,3 +27,14 @@ audioadapter-buffers = "5.1"
 rtrb = "0.4.0"
 cpal = "0.18.2"
 clap = { version = "4.6.7", features = ["derive"] }
+library = { path = "crates/library" }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+lofty = "0.25.4"
+jwalk = "0.9.0"
+rayon = "1.10"
+notify = "8.2.0"
+notify-debouncer-full = "0.7.0"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
+webp = "0.3.1"
+blake3 = "1.8.7"
+tempfile = "3.27.0"
