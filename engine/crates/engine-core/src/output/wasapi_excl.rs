@@ -1,4 +1,10 @@
-//! WASAPI exclusive-mode output, event-driven. All COM objects live on one render thread.
+//! WASAPI exclusive-mode output. All COM objects live on one render thread.
+//!
+//! The stream is polled ("push" mode): the render thread tops a buffer of `BUFFER_HNS` up from
+//! the device's actual padding every few milliseconds. Event-driven exclusive mode writes one
+//! period per event, so it plays slow on drivers that signal less often than once per period.
+//! Virtual devices (Voicemeeter VAIO, Steam Streaming Speakers) fire on the 15.6 ms system timer
+//! whatever the period, and a 10 ms period then plays at about 62% speed, slow and "robotic".
 use std::sync::atomic::{AtomicBool, Ordering::*};
 use std::sync::{mpsc, Arc};
 use std::thread::JoinHandle;
@@ -78,6 +84,9 @@ fn resolve_transport(from_cpal: Option<Transport>, friendly_name: &str) -> Trans
     from_cpal.unwrap_or_else(|| if friendly_name.to_ascii_lowercase().contains("bluetooth") { Transport::Bluetooth } else { Transport::Other })
 }
 
+/// Device buffer length (100 ms): deep enough to ride out the render thread's coarse sleeps.
+const BUFFER_HNS: i64 = 1_000_000;
+
 pub struct WasapiStream { info: StreamInfo, alive: Arc<AtomicBool>, join: Option<JoinHandle<()>> }
 
 impl OutputStream for WasapiStream {
@@ -107,16 +116,16 @@ pub fn open(id: Option<&str>, fmt: OutputFormat, mut source: RingSource) -> Resu
                 let mut last_err = OutputError::UnsupportedFormat("no matching wave format".into());
                 for wf in wave_formats(fmt.sample, fmt.sample_rate, fmt.channels) {
                     let mut client = dev.get_iaudioclient().map_err(map_err)?;
-                    let (def, _min) = client.get_device_period().map_err(map_err)?;
-                    let period = client.calculate_aligned_period_near(def, Some(128), &wf).map_err(map_err)?;
-                    let mut result = client.initialize_client(&wf, &Direction::Render, &StreamMode::EventsExclusive { period_hns: period });
+                    let (period, _min) = client.get_device_period().map_err(map_err)?;
+                    let mode = |buffer_duration_hns| StreamMode::PollingExclusive { period_hns: period.min(buffer_duration_hns), buffer_duration_hns };
+                    let mut result = client.initialize_client(&wf, &Direction::Render, &mode(BUFFER_HNS));
                     if let Err(WasapiError::Windows(w)) = &result
                         && w.code() == AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED
                     {
                         let frames = client.get_buffer_size().map_err(map_err)?;
                         let aligned = calculate_period_100ns(frames as i64, fmt.sample_rate as i64);
                         client = dev.get_iaudioclient().map_err(map_err)?;
-                        result = client.initialize_client(&wf, &Direction::Render, &StreamMode::EventsExclusive { period_hns: aligned });
+                        result = client.initialize_client(&wf, &Direction::Render, &mode(aligned));
                     }
                     match result {
                         Ok(()) => return Ok((client, wf.get_blockalign() as usize, name, dev_id)),
@@ -133,7 +142,6 @@ pub fn open(id: Option<&str>, fmt: OutputFormat, mut source: RingSource) -> Resu
                 }
             };
             let run = (|| -> Result<(), WasapiError> {
-                let event = client.set_get_eventhandle()?;
                 let render = client.get_audiorenderclient()?;
                 let max_frames = client.get_buffer_size()? as usize;
                 let mut buf = vec![0u8; max_frames * bpf];
@@ -142,11 +150,9 @@ pub fn open(id: Option<&str>, fmt: OutputFormat, mut source: RingSource) -> Resu
                 render.write_to_device(frames, &buf[..frames * bpf], None)?;
                 client.start_stream()?;
                 let _ = init_tx.send(Ok((name, dev_id)));
+                // A removed device fails the padding query or the write (AUDCLNT_E_DEVICE_INVALIDATED).
                 while alive2.load(Acquire) {
-                    if event.wait_for_event(1000).is_err() {
-                        source.shared().device_lost.store(true, Release);
-                        break;
-                    }
+                    std::thread::sleep(std::time::Duration::from_millis(4));
                     let frames = client.get_available_space_in_frames()? as usize;
                     if frames == 0 { continue; }
                     source.fill(&mut buf[..frames * bpf]);
