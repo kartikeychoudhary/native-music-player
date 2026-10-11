@@ -35,7 +35,7 @@ fn hex(p: [f32; 3]) -> String {
 /// Palette of packed RGB bytes via k-means (k = 5, 10 iterations, seeded deterministically from
 /// pixels spread evenly through luma order). Clusters under 5 % of pixels can't be vibrant/muted.
 pub fn extract(rgb: &[u8]) -> Palette {
-    let px: Vec<[f32; 3]> = rgb.chunks_exact(3).map(|c| [c[0] as f32, c[1] as f32, c[2] as f32]).collect();
+    let px: Vec<[f32; 3]> = rgb.as_chunks::<3>().0.iter().map(|c| [c[0] as f32, c[1] as f32, c[2] as f32]).collect();
     if px.is_empty() {
         return Palette { dominant: "#000000".into(), vibrant: "#000000".into(), muted: "#000000".into() };
     }
