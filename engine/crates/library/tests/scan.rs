@@ -240,3 +240,52 @@ fn cancelled_scan_stops() {
     let err = fx.lib.scanner(ScanOptions::default()).unwrap().scan(fx.folder, &[], true, &mut |_| {}, &AtomicBool::new(true)).unwrap_err();
     assert!(matches!(err, library::LibError::Cancelled));
 }
+
+/// Makes `dir` unlistable until dropped (so the scan's `read_dir` of it fails). `None` when the
+/// platform has no way to do that here.
+struct Locked(PathBuf);
+
+impl Locked {
+    #[cfg(unix)]
+    fn new(dir: &Path) -> Option<Self> {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o000)).ok()?;
+        // root ignores mode bits, so the lock would be a no-op.
+        if std::fs::read_dir(dir).is_ok() { std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).ok()?; return None; }
+        Some(Locked(dir.to_path_buf()))
+    }
+    #[cfg(windows)]
+    fn new(dir: &Path) -> Option<Self> {
+        let user = std::env::var("USERNAME").ok()?;
+        let ok = std::process::Command::new("icacls").arg(dir).arg("/deny").arg(format!("{user}:(RD)")).output().ok()?.status.success();
+        if !ok { return None; }
+        let locked = Locked(dir.to_path_buf());
+        if std::fs::read_dir(dir).is_ok() { return None; }
+        Some(locked)
+    }
+    #[cfg(not(any(unix, windows)))]
+    fn new(_: &Path) -> Option<Self> { None }
+}
+
+impl Drop for Locked {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        { use std::os::unix::fs::PermissionsExt; let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755)); }
+        #[cfg(windows)]
+        { let user = std::env::var("USERNAME").unwrap_or_default(); let _ = std::process::Command::new("icacls").arg(&self.0).arg("/remove:d").arg(user).output(); }
+    }
+}
+
+#[test]
+fn unreadable_folder_is_not_marked_missing() {
+    let fx = setup();
+    let r = root(&fx);
+    build_tree(&r);
+    scan(&fx);
+    let Some(lock) = Locked::new(&r.join("Gamma")) else { eprintln!("can't make a folder unreadable here; skipping"); return };
+    let s = scan(&fx);
+    assert_eq!((s.missing, s.unchanged), (0, 2), "Gamma/Night/01.mp3 is unknown, not gone");
+    drop(lock);
+    assert_eq!(count(&fx.lib.conn(), "SELECT COUNT(*) FROM tracks WHERE missing_since IS NOT NULL"), 0);
+    assert_eq!(scan(&fx).unchanged, 3);
+}

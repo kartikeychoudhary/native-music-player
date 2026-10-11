@@ -95,6 +95,11 @@ fn walk(root: &Path, files: &mut Vec<Candidate>, covers: &mut Covers, errored: &
                 continue;
             }
         };
+        // jwalk doesn't yield a failed `read_dir` as `Err`: it parks the error on the directory entry.
+        if let Some(err) = entry.read_children.as_ref().and_then(|c| c.error()) {
+            tracing::warn!(path = %entry.path().display(), error = %err, "can't read folder; leaving its index entries untouched");
+            errored.push(entry.path());
+        }
         if !entry.file_type().is_file() { continue; }
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
