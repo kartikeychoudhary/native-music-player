@@ -194,6 +194,11 @@ struct Player {
 }
 
 /// Ring size after `recent` underruns within the last 10 s (spec §6: +1 s per burst, max 8 s).
+/// Longest a skip/seek/pause waits for its fade-out (the fade plus a 100 ms device buffer, with margin).
+const FADE_WAIT_MAX: Duration = Duration::from_millis(300);
+/// A callback this quiet isn't running (paused device, lost device, manual test backend).
+const FADE_STALLED: Duration = Duration::from_millis(50);
+
 pub fn grown_buffer(current: f64, recent: usize) -> f64 {
     if recent >= 3 { (current + 1.0).min(8.0) } else { current }
 }
@@ -230,6 +235,7 @@ impl Player {
     fn handle(&mut self, cmd: Command) {
         match cmd {
             Command::SetQueue { items, start } => {
+                self.fade_out();
                 self.stop_internal();
                 self.cur = self.queue.replace(items, start);
                 self.emit_queue();
@@ -242,6 +248,7 @@ impl Player {
             Command::SetShuffle(on) => self.edit_queue(|q, cur| q.set_shuffle(on, cur)),
             Command::SetRepeat(r) => self.edit_queue(|q, _| q.set_repeat(r)),
             Command::Clear => {
+                self.fade_out();
                 self.stop_internal();
                 self.queue.clear();
                 self.cur = 0;
@@ -271,18 +278,18 @@ impl Player {
             },
             Command::Pause => self.pause(),
             Command::Toggle => if self.status == PlaybackStatus::Playing { self.pause() } else { self.handle(Command::Play(None)) },
-            Command::Stop => { self.stop_internal(); self.publish(true); }
+            Command::Stop => { self.fade_out(); self.stop_internal(); self.publish(true); }
             Command::Next => match self.queue.user_next(self.cur) {
                 Some(n) => self.start_at(n, 0),
                 // Past the last entry: stop back at the top, as when the queue ends by itself.
-                None => { self.stop_internal(); self.cur = 0; self.publish(true) }
+                None => { self.fade_out(); self.stop_internal(); self.cur = 0; self.publish(true) }
             },
             Command::Prev => {
                 if self.queue.is_empty() { return; }
                 let target = if self.position_ms() > 3000 { Some(self.cur) } else { self.queue.user_prev(self.cur) };
                 if let Some(t) = target { self.start_at(t, 0) }
             }
-            Command::Seek(ms) => self.seek(ms),
+            Command::Seek(ms) => { self.fade_out(); self.seek(ms) }
             Command::SetVolume(v) => {
                 self.volume = v.clamp(0.0, 1.0);
                 if let Some(a) = &self.active { a.shared.set_gain(volume_gain(self.volume) as f32); }
@@ -412,7 +419,12 @@ impl Player {
 
     fn pause(&mut self) {
         if self.status != PlaybackStatus::Playing { return; }
-        if let Some(a) = &self.active { a.shared.playing.store(false, Release); }
+        self.fade_out();
+        if let Some(a) = &self.active {
+            a.shared.playing.store(false, Release);
+            // Resuming ramps back in from the silence the fade left.
+            a.shared.fade_out.store(false, Release);
+        }
         self.status = PlaybackStatus::Paused;
         self.publish(true);
     }
@@ -427,6 +439,25 @@ impl Player {
         if !self.pending_start && let Some(a) = &self.active { a.shared.playing.store(true, Release); }
         self.status = PlaybackStatus::Playing;
         self.publish(true);
+    }
+
+    /// Fades the audible output to silence before the caller interrupts it (skip, seek, pause,
+    /// stop), so the waveform isn't cut mid-cycle (a click). Waits for the output callback to
+    /// finish the fade, giving up when the callback has stalled (a lost device) or after
+    /// `FADE_WAIT_MAX`. A no-op when nothing is audible.
+    fn fade_out(&mut self) {
+        let Some(a) = &self.active else { return };
+        let sh = &a.shared;
+        if self.status != PlaybackStatus::Playing || self.pending_start || !sh.playing.load(Acquire) || sh.fade_out.load(Acquire) { return; }
+        sh.faded.store(false, Release);
+        sh.fade_out.store(true, Release);
+        let start = Instant::now();
+        let (mut fills, mut moved) = (sh.fills.load(Relaxed), Instant::now());
+        while !sh.faded.load(Acquire) && start.elapsed() < FADE_WAIT_MAX && moved.elapsed() < FADE_STALLED {
+            std::thread::sleep(Duration::from_millis(1));
+            let f = sh.fills.load(Relaxed);
+            if f != fills { (fills, moved) = (f, Instant::now()); }
+        }
     }
 
     fn stop_internal(&mut self) {
@@ -554,6 +585,7 @@ impl Player {
 
     /// Opens the decoder at `idx` (skipping broken entries), seeks to `ms`, opens a stream and starts feeding.
     fn start_at(&mut self, idx: usize, ms: u64) {
+        self.fade_out();
         let keep_prepared = self.prepared.take();
         self.stop_internal();
         // A user-initiated start re-probes exclusive access (the device may have been released).
@@ -776,6 +808,8 @@ impl Player {
             a.carry_pos = 0;
             a.shared.discard_to.store(a.written_frames(), Release);
             a.shared.draining.store(false, Release);
+            // After a user seek's fade-out, the new position ramps in.
+            a.shared.fade_out.store(false, Release);
         }
         self.reopen = None;
         self.end_pending = false;

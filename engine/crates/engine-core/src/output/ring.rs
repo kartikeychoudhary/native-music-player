@@ -5,6 +5,9 @@ use rtrb::{Consumer, Producer, RingBuffer};
 
 use super::format::{DeviceSample, OutputFormat};
 
+/// Length of the fade applied when playback is interrupted (skip, seek, pause, stop).
+pub const FADE_MS: u64 = 10;
+
 pub struct StreamShared {
     pub consumed_frames: AtomicU64,
     pub discard_to: AtomicU64,
@@ -13,6 +16,13 @@ pub struct StreamShared {
     pub draining: AtomicBool,
     pub device_lost: AtomicBool,
     pub apply_gain: AtomicBool,
+    /// Set by the player before it interrupts audible audio: the callback ramps the output down
+    /// over `FADE_MS`, then writes silence without consuming. Clearing it ramps audio back in.
+    pub fade_out: AtomicBool,
+    /// The fade has finished and enough silence followed it to have reached the device.
+    pub faded: AtomicBool,
+    /// Callback invocations, so the player can tell a running callback from a stalled one.
+    pub fills: AtomicU64,
     gain_bits: AtomicU32,
 }
 
@@ -21,7 +31,16 @@ impl StreamShared {
     pub fn gain(&self) -> f32 { f32::from_bits(self.gain_bits.load(Relaxed)) }
 }
 
-pub struct RingSource { cons: Consumer<u8>, shared: Arc<StreamShared>, bpf: usize, sample: DeviceSample, consumed: u64 }
+pub struct RingSource {
+    cons: Consumer<u8>, shared: Arc<StreamShared>, bpf: usize, sample: DeviceSample, consumed: u64,
+    /// Fade gain (1.0 = untouched, so playback outside a fade stays bit-exact) and its per-frame step.
+    level: f32,
+    step: f32,
+    /// Largest request seen: the silence after a fade must outlast the device's buffer.
+    max_request: usize,
+    silent_frames: usize,
+    was_fading: bool,
+}
 
 pub fn ring_pair(capacity_frames: usize, format: OutputFormat) -> (Producer<u8>, RingSource, Arc<StreamShared>) {
     let bpf = format.bytes_per_frame();
@@ -29,9 +48,12 @@ pub fn ring_pair(capacity_frames: usize, format: OutputFormat) -> (Producer<u8>,
     let shared = Arc::new(StreamShared {
         consumed_frames: AtomicU64::new(0), discard_to: AtomicU64::new(0), underruns: AtomicU64::new(0),
         playing: AtomicBool::new(false), draining: AtomicBool::new(false), device_lost: AtomicBool::new(false),
-        apply_gain: AtomicBool::new(false), gain_bits: AtomicU32::new(1.0f32.to_bits()),
+        apply_gain: AtomicBool::new(false), fade_out: AtomicBool::new(false), faded: AtomicBool::new(false), fills: AtomicU64::new(0),
+        gain_bits: AtomicU32::new(1.0f32.to_bits()),
     });
-    (prod, RingSource { cons, shared: shared.clone(), bpf, sample: format.sample, consumed: 0 }, shared)
+    let step = 1.0 / (format.sample_rate as u64 * FADE_MS / 1000).max(1) as f32;
+    let source = RingSource { cons, shared: shared.clone(), bpf, sample: format.sample, consumed: 0, level: 1.0, step, max_request: 0, silent_frames: 0, was_fading: false };
+    (prod, source, shared)
 }
 
 impl RingSource {
@@ -41,6 +63,11 @@ impl RingSource {
     /// Realtime-safe (no allocation, no locks). Returns the number of bytes taken from the ring.
     pub fn fill(&mut self, out: &mut [u8]) -> usize {
         let bpf = self.bpf;
+        self.shared.fills.fetch_add(1, Relaxed);
+        self.max_request = self.max_request.max(out.len() / bpf);
+        let fading = self.shared.fade_out.load(Acquire);
+        if fading && !self.was_fading { self.silent_frames = 0; }
+        self.was_fading = fading;
         let discard_to = self.shared.discard_to.load(Acquire);
         let mut discarded = false;
         if self.consumed < discard_to {
@@ -53,7 +80,9 @@ impl RingSource {
         }
         let mut n = 0;
         if self.shared.playing.load(Acquire) && self.consumed >= discard_to {
-            let want = out.len() / bpf;
+            let mut want = out.len() / bpf;
+            // A fade consumes only the frames it ramps over, so the position holds where it went silent.
+            if fading { want = want.min((self.level / self.step).ceil() as usize); }
             let frames = want.min(self.cons.slots() / bpf);
             n = frames * bpf;
             if n > 0 {
@@ -65,16 +94,34 @@ impl RingSource {
                     chunk.commit_all();
                     self.consumed += frames as u64;
                     if self.shared.apply_gain.load(Relaxed) { apply_gain(&mut out[..n], self.sample, self.shared.gain()); }
+                    if fading || self.level < 1.0 { self.ramp(&mut out[..n], fading); }
                 } else {
                     n = 0;
                 }
             }
-            // A fill that just discarded (seek) is not a dropout.
-            if frames < want && !discarded && !self.shared.draining.load(Relaxed) { self.shared.underruns.fetch_add(1, Relaxed); }
+            if fading {
+                // Whatever couldn't be ramped (nothing buffered) is silence already.
+                if n == 0 { self.level = 0.0; }
+                if self.level <= 0.0 {
+                    self.silent_frames += out.len() / bpf - n / bpf;
+                    if self.silent_frames >= 2 * self.max_request { self.shared.faded.store(true, Release); }
+                }
+            } else if frames < want && !discarded && !self.shared.draining.load(Relaxed) {
+                // A fill that just discarded (seek) is not a dropout.
+                self.shared.underruns.fetch_add(1, Relaxed);
+            }
         }
         out[n..].fill(0);
         self.shared.consumed_frames.store(self.consumed, Release);
         n
+    }
+
+    /// Scales `buf` frame by frame while moving the fade level toward silence (`down`) or unity.
+    fn ramp(&mut self, buf: &mut [u8], down: bool) {
+        for frame in buf.chunks_exact_mut(self.bpf) {
+            self.level = if down { (self.level - self.step).max(0.0) } else { (self.level + self.step).min(1.0) };
+            apply_gain(frame, self.sample, self.level);
+        }
     }
 }
 
@@ -191,5 +238,54 @@ mod tests {
         // a later genuine shortfall still counts
         s.fill(&mut out);
         assert_eq!(sh.underruns.load(Relaxed), 1);
+    }
+
+    fn i16s(b: &[u8]) -> Vec<i16> { b.as_chunks::<2>().0.iter().map(|c| i16::from_le_bytes(*c)).collect() }
+
+    fn loud(p: &mut rtrb::Producer<u8>, frames: usize) { push(p, &10_000i16.to_le_bytes().repeat(frames * 2)); }
+
+    #[test]
+    fn fade_out_ramps_to_silence_then_holds_position() {
+        let (mut p, mut s, sh) = ring_pair(8192, fmt());
+        sh.playing.store(true, Relaxed);
+        loud(&mut p, 4000);
+        let mut out = vec![0u8; 256 * 4];
+        s.fill(&mut out);
+        assert!(i16s(&out).iter().all(|&v| v == 10_000), "untouched before a fade");
+        sh.fade_out.store(true, Release);
+        let mut heard = vec![];
+        for _ in 0..8 { s.fill(&mut out); heard.extend(i16s(&out)); }
+        let fade = FADE_MS * 48_000 / 1000; // frames at 48 kHz
+        let left: Vec<i16> = heard.iter().step_by(2).copied().collect();
+        assert!(left.windows(2).all(|w| w[1] <= w[0]), "monotonic ramp down");
+        assert!(left[0] > 9_000 && left[fade as usize - 2] < 500, "{} .. {}", left[0], left[fade as usize - 2]);
+        assert!(left[fade as usize..].iter().all(|&v| v == 0), "silent after the ramp");
+        let held = sh.consumed_frames.load(Relaxed);
+        assert_eq!(held, 256 + fade, "the ramp's frames are consumed, nothing after it");
+        assert!(sh.faded.load(Acquire), "faded once silence has been written past the device buffer");
+        assert_eq!(sh.underruns.load(Relaxed), 0);
+    }
+
+    #[test]
+    fn audio_ramps_back_in_after_a_fade() {
+        let (mut p, mut s, sh) = ring_pair(8192, fmt());
+        sh.playing.store(true, Relaxed);
+        loud(&mut p, 4000);
+        sh.fade_out.store(true, Release);
+        let mut out = vec![0u8; 1024 * 4];
+        s.fill(&mut out);
+        sh.fade_out.store(false, Release);
+        s.fill(&mut out);
+        let left: Vec<i16> = i16s(&out).into_iter().step_by(2).collect();
+        assert!(left[0] < 500 && left.windows(2).all(|w| w[1] >= w[0]) && left[1023] == 10_000, "{} .. {}", left[0], left[1023]);
+    }
+
+    #[test]
+    fn a_fade_with_nothing_buffered_completes() {
+        let (_p, mut s, sh) = ring_pair(64, fmt());
+        sh.playing.store(true, Relaxed);
+        sh.fade_out.store(true, Release);
+        for _ in 0..3 { s.fill(&mut [0u8; 64]); }
+        assert!(sh.faded.load(Acquire));
     }
 }

@@ -371,3 +371,40 @@ fn exclusive_caps_failure_reason_is_in_the_note() {
     let paths = signal_paths(&events);
     assert!(paths.iter().all(|s| s.notes == vec!["Exclusive mode unavailable (exclusive mode not available) — using processed mode".to_string()]), "{paths:?}");
 }
+
+/// Pulls small blocks at about real time (256 frames per 5 ms), like a device callback, until the returned flag is set.
+fn live_puller(h: &NullHandle) -> (Arc<std::sync::atomic::AtomicBool>, std::thread::JoinHandle<()>) {
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (h, s) = (h.clone(), stop.clone());
+    let join = std::thread::spawn(move || while !s.load(std::sync::atomic::Ordering::Relaxed) { h.pull(256); std::thread::sleep(Duration::from_millis(5)); });
+    (stop, join)
+}
+
+/// Largest jump between consecutive samples of one channel (interleaved stereo): a cut
+/// mid-waveform is a jump far beyond what the music itself does, heard as a click.
+fn max_jump(samples: &[f32]) -> f32 {
+    samples.windows(3).map(|w| (w[2] - w[0]).abs()).fold(0.0, f32::max)
+}
+
+#[test]
+fn interrupting_playback_fades_out_instead_of_cutting() {
+    for interrupt in [Command::Pause, Command::Stop, Command::Next, Command::Seek(1500)] {
+        let (p, h, _rx) = setup(OutputMode::Processed);
+        queue(&p, &["flac16_44k.flac", "flac16_44k.flac"]);
+        wait_for(&p, |s| s.status == PlaybackStatus::Playing);
+        let (stop, join) = live_puller(&h);
+        wait_for(&p, |s| s.position_ms >= 300);
+        let label = format!("{interrupt:?}");
+        let before = h.recorded().len();
+        let after = match interrupt { Command::Next => 1, _ => 0 };
+        p.send(interrupt);
+        wait_for(&p, |s| s.queue_index == Some(after));
+        std::thread::sleep(Duration::from_millis(150));
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        join.join().unwrap();
+        let rec = f32s(&h.recorded());
+        let natural = max_jump(&rec[before / 4 - 8820..before / 4]);
+        let worst = max_jump(&rec[before / 4 - 2..]);
+        assert!(worst < natural * 2.0, "{label}: a {worst:.4} jump at the interruption; the music itself moves at most {natural:.4}");
+    }
+}
