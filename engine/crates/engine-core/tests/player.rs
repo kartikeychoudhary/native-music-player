@@ -304,3 +304,57 @@ fn bit_perfect_fallback_ignores_software_volume() {
         assert_eq!(vol.detail, "100%");
     }
 }
+
+#[test]
+fn any_exclusive_open_failure_falls_back_to_shared_with_note() {
+    let (p, h, rx) = setup(OutputMode::BitPerfect);
+    h.set_fail_exclusive_format(true);
+    queue(&p, &["short_a.flac"]);
+    let events = run_to_end(&h, &rx);
+    assert_eq!(h.opened().len(), 1);
+    assert!(!h.opened()[0].1, "fallback stream must be shared");
+    assert_eq!(h.recorded().len() / 8, 22_050);
+    let paths = signal_paths(&events);
+    assert!(!paths.is_empty());
+    assert!(paths.iter().all(|s| !s.bit_perfect && s.notes.iter().any(|n| n == "Exclusive open failed (unsupported output format: driver rejected the format) — using shared mode")), "{paths:?}");
+}
+
+#[test]
+fn user_next_re_probes_after_an_exclusive_denial() {
+    let (p, h, _rx) = setup(OutputMode::BitPerfect);
+    h.set_fail_exclusive(true);
+    queue(&p, &["short_a.flac", "short_b.flac"]);
+    wait_for(&p, |s| s.status == PlaybackStatus::Playing);
+    assert!(!h.opened()[0].1);
+    h.set_fail_exclusive(false);
+    p.send(Command::Next);
+    wait_for(&p, |s| s.queue_index == Some(1) && s.status == PlaybackStatus::Playing);
+    assert_eq!(h.opened().len(), 2);
+    assert!(h.opened()[1].1, "a user-initiated start must re-probe exclusive access");
+}
+
+#[test]
+fn play_from_stopped_re_probes_after_a_caps_time_denial() {
+    let (p, h, _rx) = setup(OutputMode::BitPerfect);
+    h.set_deny_exclusive_caps(true);
+    queue(&p, &["short_a.flac", "short_b.flac"]);
+    wait_for(&p, |s| s.status == PlaybackStatus::Playing);
+    assert!(!h.opened()[0].1);
+    h.set_deny_exclusive_caps(false);
+    p.send(Command::Stop);
+    wait_for(&p, |s| s.status == PlaybackStatus::Stopped);
+    p.send(Command::Play(None));
+    wait_for(&p, |s| s.status == PlaybackStatus::Playing && h.opened().len() == 2);
+    assert!(h.opened()[1].1, "Play from Stopped must re-probe exclusive access");
+}
+
+#[test]
+fn bluetooth_details_are_queried_once_per_stream() {
+    let (p, h, rx) = setup(OutputMode::Processed);
+    h.set_transport(Transport::Bluetooth);
+    queue(&p, &["gap_a.flac", "gap_b.flac"]);
+    let events = run_to_end(&h, &rx);
+    assert_eq!(h.opened().len(), 1);
+    assert!(signal_paths(&events).len() >= 2);
+    assert_eq!(h.bluetooth_queries(), 1);
+}

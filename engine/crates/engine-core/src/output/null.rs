@@ -17,10 +17,13 @@ struct Inner {
     caps: Mutex<DeviceCaps>,
     transport: Mutex<Transport>,
     bluetooth: Mutex<Option<BluetoothInfo>>,
+    bluetooth_queries: AtomicU64,
     recorded: Mutex<Vec<u8>>,
     opened: Mutex<Vec<(OutputFormat, bool)>>,
     source: Mutex<Option<RingSource>>,
     fail_exclusive: AtomicBool,
+    /// `open(_, _, true, _)` fails with `UnsupportedFormat`, as when a driver rejects the exact format.
+    fail_exclusive_format: AtomicBool,
     /// `caps(_, true)` is denied (as a real exclusive backend would) while a stream is open.
     fail_caps_while_open: AtomicBool,
     /// `caps(_, true)` is always denied.
@@ -45,10 +48,12 @@ impl NullBackend {
             }),
             transport: Mutex::new(Transport::Other),
             bluetooth: Mutex::new(None),
+            bluetooth_queries: AtomicU64::new(0),
             recorded: Mutex::new(Vec::new()),
             opened: Mutex::new(Vec::new()),
             source: Mutex::new(None),
             fail_exclusive: AtomicBool::new(false),
+            fail_exclusive_format: AtomicBool::new(false),
             fail_caps_while_open: AtomicBool::new(false),
             deny_exclusive_caps: AtomicBool::new(false),
             generation: AtomicU64::new(0),
@@ -74,10 +79,13 @@ impl NullHandle {
     pub fn underruns(&self) -> u64 {
         self.inner.source.lock().unwrap().as_ref().map_or(0, |s| s.shared().underruns.load(Relaxed))
     }
+    /// How many times the player asked for Bluetooth codec details.
+    pub fn bluetooth_queries(&self) -> u64 { self.inner.bluetooth_queries.load(Relaxed) }
     pub fn set_caps(&self, c: DeviceCaps) { *self.inner.caps.lock().unwrap() = c; }
     pub fn set_transport(&self, t: Transport) { *self.inner.transport.lock().unwrap() = t; }
     pub fn set_bluetooth(&self, b: Option<BluetoothInfo>) { *self.inner.bluetooth.lock().unwrap() = b; }
     pub fn set_fail_exclusive(&self, on: bool) { self.inner.fail_exclusive.store(on, Relaxed); }
+    pub fn set_fail_exclusive_format(&self, on: bool) { self.inner.fail_exclusive_format.store(on, Relaxed); }
     pub fn set_fail_caps_while_open(&self, on: bool) { self.inner.fail_caps_while_open.store(on, Relaxed); }
     pub fn set_deny_exclusive_caps(&self, on: bool) { self.inner.deny_exclusive_caps.store(on, Relaxed); }
     pub fn simulate_device_lost(&self) {
@@ -131,6 +139,7 @@ impl OutputBackend for NullBackend {
 
     fn open(&self, _device: Option<&str>, format: OutputFormat, exclusive: bool, source: RingSource) -> Result<Box<dyn OutputStream>, OutputError> {
         if exclusive && self.inner.fail_exclusive.load(Relaxed) { return Err(OutputError::ExclusiveDenied("device busy".into())); }
+        if exclusive && self.inner.fail_exclusive_format.load(Relaxed) { return Err(OutputError::UnsupportedFormat("driver rejected the format".into())); }
         self.inner.opened.lock().unwrap().push((format, exclusive));
         let mut slot = self.inner.source.lock().unwrap();
         let generation = self.inner.generation.fetch_add(1, AcqRel) + 1;
@@ -148,6 +157,7 @@ impl OutputBackend for NullBackend {
     }
 
     fn bluetooth(&self, stream: &StreamInfo) -> Option<BluetoothInfo> {
+        self.inner.bluetooth_queries.fetch_add(1, Relaxed);
         (stream.transport == Transport::Bluetooth).then(|| self.inner.bluetooth.lock().unwrap().clone().unwrap_or_default())
     }
 }

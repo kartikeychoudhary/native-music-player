@@ -75,6 +75,8 @@ struct Active {
     prod: rtrb::Producer<u8>,
     shared: Arc<StreamShared>,
     info: StreamInfo,
+    /// Bluetooth codec details, queried once per opened stream (the probe may spawn `pw-dump`).
+    bluetooth: Option<BluetoothInfo>,
     /// Exclusive caps this stream was planned with. A real exclusive backend cannot re-probe a
     /// device our own stream holds (EBUSY), so later plans reuse these.
     excl_caps: Option<DeviceCaps>,
@@ -123,8 +125,10 @@ struct Player {
     /// A freshly opened stream waits for its first data before `playing` is set, so the callback
     /// never sees an empty ring that counts as an underrun.
     pending_start: bool,
-    /// Why exclusive access was denied on this device. While set, every plan is shared; it is
-    /// cleared on SetMode, SetDevice and device loss.
+    /// Why exclusive access was denied on this device. While set, every plan is shared, so gapless
+    /// advances and same-stream seeks keep the shared stream. It is cleared on every user-initiated
+    /// start (`start_at`: Play from Stopped, play item, Next/Prev, SetMode, SetDevice) and on device
+    /// loss, so a transient hold (e.g. PipeWire) is re-probed.
     exclusive_denied: Option<String>,
     /// Exclusive caps used by the most recent plan; handed to `Active` when a stream opens for it.
     last_excl_caps: Option<DeviceCaps>,
@@ -277,11 +281,17 @@ impl Player {
     /// Plans `dec` for the current mode and device. Once exclusive access has been denied, plans
     /// are shared (processed) and carry the denial note, so gapless continuation still matches.
     fn plan_for(&mut self, dec: &mut dyn TrackDecoder, current: Option<(OutputFormat, bool)>) -> PipelinePlan {
+        self.plan_with(dec, current, None)
+    }
+
+    /// `plan_for`, but `open_failed` (why an exclusive open just failed) forces a shared plan for
+    /// this track only, with a note.
+    fn plan_with(&mut self, dec: &mut dyn TrackDecoder, current: Option<(OutputFormat, bool)>, open_failed: Option<&str>) -> PipelinePlan {
         let device = self.device.clone();
         let dev = device.as_deref();
         let shared = self.backend.caps(dev, false).unwrap_or_else(|_| DeviceCaps::fallback());
         let mut exclusive = None;
-        if self.mode == OutputMode::BitPerfect && self.exclusive_denied.is_none() {
+        if self.mode == OutputMode::BitPerfect && self.exclusive_denied.is_none() && open_failed.is_none() {
             // While our own exclusive stream is open the device is busy to a fresh probe, so reuse its caps.
             let held = self.active.as_ref().filter(|a| a.exclusive()).and_then(|a| a.excl_caps.clone());
             match held.map(Ok).unwrap_or_else(|| self.backend.caps(dev, true)) {
@@ -291,7 +301,7 @@ impl Player {
             }
         }
         self.last_excl_caps = exclusive.clone();
-        let force_shared = self.exclusive_denied.is_some();
+        let force_shared = self.exclusive_denied.is_some() || open_failed.is_some();
         let spec = dec.info().spec;
         let mut plan = plan_output(&PlanInput {
             source: &spec, dsd_rate: dec.info().dsd_rate, mode: if force_shared { OutputMode::Processed } else { self.mode },
@@ -299,6 +309,8 @@ impl Player {
         });
         if let Some(reason) = &self.exclusive_denied {
             plan.notes.push(format!("Exclusive access denied ({reason}) — using shared mode"));
+        } else if let Some(reason) = open_failed {
+            plan.notes.push(format!("Exclusive open failed ({reason}) — using shared mode"));
         }
         if let Some(out) = plan.dsd { dec.set_dsd_output(out); }
         plan
@@ -312,23 +324,30 @@ impl Player {
         let mut stream = self.backend.open(self.device.as_deref(), fmt, plan.exclusive, src)?;
         stream.start()?;
         let info = stream.info().clone();
+        let bluetooth = self.backend.bluetooth(&info);
         let excl_caps = if plan.exclusive { self.last_excl_caps.clone() } else { None };
-        self.active = Some(Active { _stream: stream, prod, shared, info, excl_caps, written_bytes: 0, carry: vec![], carry_pos: 0 });
+        self.active = Some(Active { _stream: stream, prod, shared, info, bluetooth, excl_caps, written_bytes: 0, carry: vec![], carry_pos: 0 });
         // Underrun reporting compares against the new ring's counter, which starts at 0.
         self.last_underruns.0 = 0;
         Ok(())
     }
 
-    /// Opens a stream for `plan`. If exclusive access is denied, remembers the denial (sticky) and
-    /// re-plans in shared mode, which adds the denial note. Returns the plan actually used.
-    /// The planner's notes for the failed exclusive plan describe that plan, so they aren't carried;
-    /// player notes (the reopen gap note) are added by the caller to the returned plan.
+    /// Opens a stream for `plan`. If an exclusive open fails, re-plans this track in shared mode
+    /// with a note: a denial (`ExclusiveDenied`) is remembered (sticky) and noted as such; any other
+    /// error (format rejected, rate not settable, ...) only affects this track. Returns the plan
+    /// actually used. The planner's notes for the failed exclusive plan describe that plan, so they
+    /// aren't carried; player notes (the reopen gap note) are added by the caller to the returned plan.
     fn open_stream_with_fallback(&mut self, dec: &mut dyn TrackDecoder, plan: PipelinePlan) -> Result<PipelinePlan, OutputError> {
         match self.open_stream(&plan) {
             Ok(()) => Ok(plan),
-            Err(OutputError::ExclusiveDenied(reason)) if plan.exclusive => {
-                self.exclusive_denied = Some(reason);
-                let shared = self.plan_for(dec, None);
+            Err(e) if plan.exclusive => {
+                let shared = match e {
+                    OutputError::ExclusiveDenied(reason) => {
+                        self.exclusive_denied = Some(reason);
+                        self.plan_for(dec, None)
+                    }
+                    other => self.plan_with(dec, None, Some(&other.to_string())),
+                };
                 self.open_stream(&shared)?;
                 Ok(shared)
             }
@@ -340,6 +359,8 @@ impl Player {
     fn start_at(&mut self, idx: usize, ms: u64) {
         let keep_prepared = self.prepared.take();
         self.stop_internal();
+        // A user-initiated start re-probes exclusive access (the device may have been released).
+        self.exclusive_denied = None;
         self.prepared = keep_prepared;
         let (mut idx, mut ms) = (idx, ms);
         loop {
@@ -364,7 +385,7 @@ impl Player {
     fn begin_feeding(&mut self, idx: usize, dec: Box<dyn TrackDecoder>, plan: PipelinePlan, start_ms: u64, reuse: Option<StreamResampler>) {
         let a = self.active.as_ref().expect("stream open before feeding");
         let info = dec.info().clone();
-        let signal = build_signal_path(&info, &plan, &a.info, self.effective_volume(), self.backend.bluetooth(&a.info), a.shared.underruns.load(Relaxed));
+        let signal = build_signal_path(&info, &plan, &a.info, self.effective_volume(), a.bluetooth.clone(), a.shared.underruns.load(Relaxed));
         self.markers.push_back(Marker {
             start: a.written_frames(), idx, start_ms, out_rate: plan.format.sample_rate, signal,
             duration_ms: info.total_frames.map(|f| f * 1000 / info.spec.sample_rate.max(1) as u64),
