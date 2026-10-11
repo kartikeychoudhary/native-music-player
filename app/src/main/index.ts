@@ -8,6 +8,7 @@ import { ART_SCHEME, createArtHandler } from './artProtocol'
 import { engineArgs, resolveDataDir } from './engineArgs'
 import { enginePath } from './engine/enginePath'
 import { EngineSupervisor } from './engine/supervisor'
+import { createEventRelay } from './eventRelay'
 import { logDir, logger } from './logs'
 import { shouldBlockNavigation } from './navigation'
 import { safeSend } from './safeSend'
@@ -30,9 +31,9 @@ const dataDir = () => resolveDataDir({ isPackaged: app.isPackaged, env: process.
 
 const supervisor = new EngineSupervisor(() => spawn(binary(), engineArgs(dataDir()), { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }), { protocolVersion: PROTOCOL_VERSION })
 
-function send(event: string, payload: unknown) {
-  safeSend(win, 'aurora:event', event, payload)
-}
+// Holds library notices (sent once, right after the engine starts) until the page has loaded.
+const relay = createEventRelay((event, payload) => safeSend(win, 'aurora:event', event, payload))
+const send = relay.send
 
 function saveBounds() {
   if (!win || win.isDestroyed()) return
@@ -55,7 +56,9 @@ function createWindow() {
   if (visible && saved.maximized) win.maximize()
   win.once('ready-to-show', () => win?.show())
   win.on('close', saveBounds)
-  win.on('closed', () => { win = null })
+  win.on('closed', () => { win = null; relay.reset() })
+  win.webContents.on('did-start-loading', relay.reset)
+  win.webContents.on('did-finish-load', relay.ready)
   const devUrl = process.env.ELECTRON_RENDERER_URL
   const page = join(__dirname, '../renderer/index.html')
   const appUrl = devUrl ?? pathToFileURL(page).href
