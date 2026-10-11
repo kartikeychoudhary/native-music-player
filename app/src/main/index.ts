@@ -1,11 +1,13 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { spawn } from 'node:child_process'
 import { delimiter, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { PROTOCOL_VERSION } from '@protocol/ProtocolVersion'
 import { AUDIO_EXTENSIONS, isAllowedMethod } from '@shared/api'
 import { enginePath } from './engine/enginePath'
 import { EngineSupervisor } from './engine/supervisor'
 import { logDir, logger } from './logs'
+import { shouldBlockNavigation } from './navigation'
 import { safeSend } from './safeSend'
 
 let win: BrowserWindow | null = null
@@ -29,8 +31,14 @@ function createWindow() {
   })
   win.once('ready-to-show', () => win?.show())
   win.on('closed', () => { win = null })
-  if (process.env.ELECTRON_RENDERER_URL) win.loadURL(process.env.ELECTRON_RENDERER_URL)
-  else win.loadFile(join(__dirname, '../renderer/index.html'))
+  const devUrl = process.env.ELECTRON_RENDERER_URL
+  const page = join(__dirname, '../renderer/index.html')
+  const appUrl = devUrl ?? pathToFileURL(page).href
+  // The window only ever shows the app: no navigating away (e.g. to a dropped file), no new windows.
+  win.webContents.on('will-navigate', (e) => { if (shouldBlockNavigation(e.url, appUrl)) e.preventDefault() })
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  if (devUrl) win.loadURL(devUrl)
+  else win.loadFile(page)
 }
 
 app.whenReady().then(() => {
