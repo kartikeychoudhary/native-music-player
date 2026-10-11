@@ -1,0 +1,13 @@
+.bar { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(320px, 1.4fr) minmax(320px, 1fr); align-items: center; gap: 16px; padding: 0 16px; background: var(--surface); border-top: 1px solid var(--border); height: var(--bar); }
+.now { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.art { width: 46px; height: 46px; border-radius: var(--radius-sm); display: grid; place-items: center; color: #17151a; background: linear-gradient(135deg, var(--accent), var(--accent-2)); flex: none; }
+.meta { min-width: 0; }
+.title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.center { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.right { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+.icon { color: var(--text-muted); }
+.icon:hover { color: var(--text); }
+.switch { font-size: 9.5px; font-weight: 700; padding: 4px 6px; border-radius: var(--radius-sm); border: 1px solid var(--border); color: var(--text-muted); }
+.switch[aria-checked='true'] { border-color: var(--ok); color: var(--ok); }
+.vol { display: flex; align-items: center; gap: 6px; color: var(--text-muted); }
+.vol input { width: 90px; accent-color: var(--accent); }

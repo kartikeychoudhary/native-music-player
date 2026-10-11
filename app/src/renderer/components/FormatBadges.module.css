@@ -1,0 +1,3 @@
+.row { display: flex; gap: 6px; align-items: center; }
+.badge { font: 700 9.5px/1 var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; padding: 4px 6px; border-radius: var(--radius-sm); border: 1px solid var(--accent); color: var(--accent); white-space: nowrap; }
+.ok { border-color: var(--ok); color: var(--ok); }

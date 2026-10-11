@@ -1,0 +1,110 @@
+import { create } from 'zustand'
+import type { DeviceInfo } from '@protocol/DeviceInfo'
+import type { EngineErrorEvent } from '@protocol/EngineErrorEvent'
+import type { OutputMode } from '@protocol/OutputMode'
+import type { PlayerState } from '@protocol/PlayerState'
+import type { QueueChanged } from '@protocol/QueueChanged'
+import type { SignalPath } from '@protocol/SignalPath'
+import type { AuroraApi, EngineStatus } from '@shared/api'
+
+export interface PlayerStore {
+  api: AuroraApi | null
+  state: PlayerState
+  stamp: number
+  signal: SignalPath | null
+  queue: QueueChanged
+  devices: DeviceInfo[]
+  engine: EngineStatus
+  error: EngineErrorEvent | null
+  panel: 'queue' | 'signal'
+  connect(api: AuroraApi): () => void
+  openFiles(): Promise<void>
+  playPaths(paths: string[]): Promise<void>
+  playItem(id: number): Promise<void>
+  toggle(): Promise<void>
+  next(): Promise<void>
+  prev(): Promise<void>
+  seek(ms: number): Promise<void>
+  setVolume(v: number): Promise<void>
+  setMode(m: OutputMode): Promise<void>
+  setDevice(id: string | null): Promise<void>
+  setPanel(p: 'queue' | 'signal'): void
+  dismissError(): void
+}
+
+const initialState: PlayerState = { status: 'stopped', queueIndex: null, track: null, positionMs: 0, durationMs: null, volume: 1, mode: 'processed', deviceId: null }
+const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
+
+export function livePosition(s: Pick<PlayerStore, 'state' | 'stamp'>, at: number): number {
+  const base = s.state.positionMs
+  if (s.state.status !== 'playing') return base
+  const p = base + Math.max(0, at - s.stamp)
+  return s.state.durationMs != null ? Math.min(p, s.state.durationMs) : p
+}
+
+export const usePlayer = create<PlayerStore>()((set, get) => {
+  const call: AuroraApi['call'] = (method, params) => {
+    const api = get().api
+    return api ? api.call(method, params) : Promise.reject(new Error('not connected'))
+  }
+  const safe = async (p: Promise<unknown>) => { try { await p } catch (e) { console.warn(e) } }
+
+  return {
+    api: null,
+    state: initialState,
+    stamp: 0,
+    signal: null,
+    queue: { items: [], current: null },
+    devices: [],
+    engine: { state: 'starting' },
+    error: null,
+    panel: 'queue',
+
+    connect(api) {
+      set({ api })
+      const refresh = async () => {
+        try {
+          const [state, queue, devices] = await Promise.all([api.call('player.state', {}), api.call('queue.get', {}), api.call('devices.list', {})])
+          set({ state, stamp: now(), queue, devices })
+        } catch { /* the engine isn't ready yet; engine.status will trigger another refresh */ }
+      }
+      const offs = [
+        api.on('player.state', (state) => set({ state, stamp: now() })),
+        api.on('player.signalPath', (signal) => set({ signal })),
+        api.on('queue.changed', (queue) => set({ queue })),
+        api.on('devices.changed', (devices) => set({ devices })),
+        api.on('engine.error', (error) => set({ error })),
+        api.on('engine.status', (engine) => { set({ engine }); if (engine.state === 'ready') void refresh() }),
+      ]
+      void api.status().then((engine) => { set({ engine }); if (engine.state === 'ready') void refresh() }).catch(() => {})
+      return () => offs.forEach((off) => off())
+    },
+
+    async openFiles() {
+      const api = get().api
+      if (!api) return
+      const paths = await api.openFiles()
+      if (paths.length) await get().playPaths(paths)
+    },
+    async playPaths(paths) {
+      await safe(call('queue.setPaths', { paths, startIndex: 0 }))
+      await safe(call('player.play', {}))
+    },
+    playItem: (id) => safe(call('player.play', { queueItemId: id })),
+    toggle: () => safe(call('player.toggle', {})),
+    next: () => safe(call('player.next', {})),
+    prev: () => safe(call('player.prev', {})),
+    async seek(ms) {
+      set((s) => ({ state: { ...s.state, positionMs: ms }, stamp: now() }))
+      await safe(call('player.seek', { ms: Math.round(ms) }))
+    },
+    async setVolume(volume) {
+      set((s) => ({ state: { ...s.state, volume } }))
+      await safe(call('player.setVolume', { volume }))
+    },
+    setMode: (mode) => safe(call('player.setMode', { mode })),
+    setDevice: (id) => safe(call('player.setDevice', { id })),
+    setPanel: (panel) => set({ panel }),
+    dismissError: () => set({ error: null }),
+  }
+})

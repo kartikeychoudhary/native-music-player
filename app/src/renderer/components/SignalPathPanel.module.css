@@ -1,0 +1,16 @@
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 20px; }
+.head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.head h2 { font-size: 14px; font-weight: 700; margin: 0; }
+.badge { font: 700 9.5px/1 var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; padding: 4px 6px; border-radius: var(--radius-sm); border: 1px solid var(--accent); color: var(--accent); }
+.ok { border-color: var(--ok); color: var(--ok); }
+.warn { border-color: var(--danger); color: var(--danger); }
+.chain { display: flex; align-items: stretch; gap: 0; overflow-x: auto; padding-bottom: 6px; font-size: 11px; }
+.pair { display: contents; }
+.node { flex: 1 0 128px; display: flex; flex-direction: column; gap: 3px; background: var(--raised); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; transition: opacity var(--dur) var(--ease); }
+.node[data-active='false'] { opacity: 0.4; border-style: dashed; }
+.node h5 { margin: 0 0 4px; font-size: 9.5px; letter-spacing: 0.1em; color: var(--text-muted); font-weight: 600; }
+.node b { font-size: 12.5px; font-weight: 700; color: var(--text); }
+.node span { color: var(--text-muted); }
+.accent { color: var(--accent) !important; }
+.arrow { display: grid; place-items: center; width: 22px; flex: 0 0 22px; color: var(--accent); }
+.notes { margin: 12px 0 0; padding-left: 16px; color: var(--text-muted); font-size: 12px; }

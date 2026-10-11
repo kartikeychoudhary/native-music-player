@@ -1,0 +1,13 @@
+.home { min-height: 100%; }
+.head { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 18px; }
+.head h1 { font-size: 26px; font-weight: 800; margin: 4px 0 0; letter-spacing: -0.01em; }
+.head :global(.mono) { font-size: 10px; letter-spacing: 0.1em; }
+.open { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border: 1px solid var(--accent); color: var(--accent); border-radius: var(--radius); font-weight: 600; transition: background var(--dur) var(--ease); }
+.open:hover { background: rgb(255 181 71 / 0.1); }
+.empty { border: 1px dashed var(--border); border-radius: var(--radius); padding: 48px; text-align: center; }
+.empty :global(.mono) { font-size: 10px; letter-spacing: 0.08em; }
+.list { list-style: none; margin: 0; padding: 0; }
+.list button { display: grid; grid-template-columns: 36px 1fr auto; gap: 12px; width: 100%; text-align: left; padding: 8px 6px; border-bottom: 1px solid #26222a; }
+.list button:hover { background: var(--raised); }
+.current button, .current .name { color: var(--accent); }
+.name { font-weight: 500; }
