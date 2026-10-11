@@ -21,8 +21,15 @@ fn cards() -> Vec<(i32, String, String)> {
         .collect()
 }
 
+/// The `hw:<card>,<device>` PCM behind device `id` (`None` = system default) and the device's name.
+/// With PipeWire, the card and device come from the sink node's ALSA props; if they can't be
+/// determined this is an error (the player then uses shared mode) rather than a guess. Without
+/// PipeWire, the card is matched by name and device 0 is assumed.
 fn hw_name(id: Option<&str>) -> Result<(String, String), OutputError> {
     let name = cpal_out::device_name(id).ok_or_else(|| OutputError::DeviceUnavailable("device not found".into()))?;
+    if let Some(dump) = crate::probe::pipewire::dump() {
+        return dump.hw_device_for(id).map(|hw| (hw, name)).map_err(OutputError::Other);
+    }
     let card = card_for(&name, &cards()).ok_or_else(|| OutputError::Other(format!("no ALSA card matches \"{name}\"")))?;
     Ok((format!("hw:{card},0"), name))
 }

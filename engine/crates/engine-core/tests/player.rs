@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::Receiver;
 use engine_core::output::null::{NullBackend, NullHandle, NullMode};
+use engine_core::output::DeviceCaps;
 use engine_core::player::{spawn_player, Command, PlayerConfig, PlayerEvent, PlayerHandle};
 use protocol::*;
 
@@ -357,4 +358,16 @@ fn bluetooth_details_are_queried_once_per_stream() {
     assert_eq!(h.opened().len(), 1);
     assert!(signal_paths(&events).len() >= 2);
     assert_eq!(h.bluetooth_queries(), 1);
+}
+
+#[test]
+fn exclusive_caps_failure_reason_is_in_the_note() {
+    // e.g. Linux: PipeWire can't tell which ALSA device the sink uses, so exclusive mode is unavailable.
+    let (p, h, rx) = setup(OutputMode::BitPerfect);
+    h.set_caps(DeviceCaps { exclusive: false, ..DeviceCaps::fallback() });
+    queue(&p, &["short_a.flac"]);
+    let events = run_to_end(&h, &rx);
+    assert!(!h.opened()[0].1);
+    let paths = signal_paths(&events);
+    assert!(paths.iter().all(|s| s.notes == vec!["Exclusive mode unavailable (exclusive mode not available) — using processed mode".to_string()]), "{paths:?}");
 }

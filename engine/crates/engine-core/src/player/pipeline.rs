@@ -6,6 +6,9 @@ use crate::output::format::{DeviceSample, OutputFormat};
 use crate::output::DeviceCaps;
 use crate::pcm::{PcmSpec, SampleKind};
 
+/// Note for a bit-perfect plan that had no exclusive caps (the player may add the reason).
+pub const EXCLUSIVE_UNAVAILABLE: &str = "Exclusive mode unavailable — using processed mode";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Passthrough { None, Int, Float, Dop }
 
@@ -99,7 +102,7 @@ pub fn plan_output(i: &PlanInput) -> PipelinePlan {
             }
             None => {
                 let mut p = processed(i, i.shared_caps, false, None);
-                p.notes.push("Exclusive mode unavailable — using processed mode".into());
+                p.notes.push(EXCLUSIVE_UNAVAILABLE.into());
                 return p;
             }
         }

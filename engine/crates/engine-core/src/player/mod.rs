@@ -19,7 +19,7 @@ use crate::output::format::OutputFormat;
 use crate::output::ring::{ring_pair, StreamShared};
 use crate::output::{DeviceCaps, OutputBackend, OutputError, OutputStream, StreamInfo};
 use chain::ProcessChain;
-use pipeline::{plan_output, Passthrough, PipelinePlan, PlanInput};
+use pipeline::{plan_output, Passthrough, PipelinePlan, PlanInput, EXCLUSIVE_UNAVAILABLE};
 use signal_path::build_signal_path;
 
 const MIN_FREE_BYTES: usize = 16 * 1024;
@@ -291,13 +291,14 @@ impl Player {
         let dev = device.as_deref();
         let shared = self.backend.caps(dev, false).unwrap_or_else(|_| DeviceCaps::fallback());
         let mut exclusive = None;
+        let mut unavailable = None;
         if self.mode == OutputMode::BitPerfect && self.exclusive_denied.is_none() && open_failed.is_none() {
             // While our own exclusive stream is open the device is busy to a fresh probe, so reuse its caps.
             let held = self.active.as_ref().filter(|a| a.exclusive()).and_then(|a| a.excl_caps.clone());
             match held.map(Ok).unwrap_or_else(|| self.backend.caps(dev, true)) {
                 Ok(c) => exclusive = Some(c),
                 Err(OutputError::ExclusiveDenied(reason)) => self.exclusive_denied = Some(reason),
-                Err(_) => {}
+                Err(e) => unavailable = Some(e.to_string()),
             }
         }
         self.last_excl_caps = exclusive.clone();
@@ -311,6 +312,10 @@ impl Player {
             plan.notes.push(format!("Exclusive access denied ({reason}) — using shared mode"));
         } else if let Some(reason) = open_failed {
             plan.notes.push(format!("Exclusive open failed ({reason}) — using shared mode"));
+        } else if let Some(reason) = unavailable {
+            for n in plan.notes.iter_mut().filter(|n| *n == EXCLUSIVE_UNAVAILABLE) {
+                *n = format!("Exclusive mode unavailable ({reason}) — using processed mode");
+            }
         }
         if let Some(out) = plan.dsd { dec.set_dsd_output(out); }
         plan

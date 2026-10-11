@@ -25,16 +25,16 @@ pub(crate) fn find_device(host: &cpal::Host, id: Option<&str>) -> Result<cpal::D
     }
 }
 
-/// Used by the exclusive-mode backends (later tasks) to name the device they open.
-#[allow(dead_code)]
+/// Name of a device (default device for `None`), as the exclusive-mode backends report it.
+#[cfg_attr(not(any(windows, target_os = "macos", target_os = "linux")), allow(dead_code))]
 pub(crate) fn device_name(id: Option<&str>) -> Option<String> {
-    find_device(&host(), id).ok()?.description().ok().map(|d| d.name().to_string())
+    find_device(&host(), id).ok().map(|d| describe_resolved(&d).1)
 }
 
 /// Transport of a device (default device for `None`); `None` if cpal cannot find it.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
 pub(crate) fn transport(id: Option<&str>) -> Option<Transport> {
-    find_device(&host(), id).ok().map(|d| describe(&d).2)
+    find_device(&host(), id).ok().map(|d| describe_resolved(&d).2)
 }
 
 pub(crate) fn transport_of(t: InterfaceType) -> Transport {
@@ -57,6 +57,20 @@ fn describe(dev: &cpal::Device) -> (String, String, Transport) {
     (id, name, transport)
 }
 
+/// `describe`, except that cpal's synthetic PipeWire default device is described as the real
+/// default sink it currently plays to (so a stream on "System default" reports the actual device
+/// name and transport, e.g. Bluetooth). Falls back to the synthetic description.
+fn describe_resolved(dev: &cpal::Device) -> (String, String, Transport) {
+    let described = describe(dev);
+    #[cfg(target_os = "linux")]
+    if crate::probe::pipewire::is_synthetic_default(&described.0)
+        && let Some(sink) = crate::probe::pipewire::dump().and_then(|d| d.default_sink())
+    {
+        return (sink.device_id(), sink.description, sink.transport);
+    }
+    described
+}
+
 fn shared_caps(dev: &cpal::Device) -> Result<DeviceCaps, OutputError> {
     let configs: Vec<_> = dev.supported_output_configs().map_err(|e| OutputError::DeviceUnavailable(e.to_string()))?.collect();
     let mut caps = DeviceCaps { rates: vec![], max_channels: 0, samples: vec![], exclusive: false };
@@ -75,11 +89,18 @@ impl CpalBackend {
         let host = host();
         let default_id = host.default_output_device().and_then(|d| d.id().ok()).map(|i| i.to_string());
         let devices = host.output_devices().map_err(|e| OutputError::Other(e.to_string()))?;
-        Ok(devices.map(|d| {
+        let list: Vec<DeviceInfo> = devices.map(|d| {
             let (id, name, transport) = describe(&d);
             let rates = shared_caps(&d).map(|c| c.rates).unwrap_or_default();
             DeviceInfo { is_default: Some(&id) == default_id.as_ref(), id, name, transport, sample_rates: rates, exclusive_capable: exclusive_capable(transport) }
-        }).collect())
+        }).collect();
+        // On PipeWire, cpal's "default" entries are synthetic: hide them and mark the real default sink.
+        #[cfg(target_os = "linux")]
+        if list.iter().any(|d| crate::probe::pipewire::is_synthetic_default(&d.id)) {
+            let default_sink = crate::probe::pipewire::dump().and_then(|d| d.default_sink_name());
+            return Ok(crate::probe::pipewire::apply_default(list, default_sink.as_deref()));
+        }
+        Ok(list)
     }
 }
 
@@ -94,7 +115,7 @@ impl OutputStream for CpalStream {
 /// format (used by the macOS hog backend), the callback converts ring bytes to f32; otherwise
 /// ring bytes are copied raw.
 pub(crate) fn open_stream(dev: &cpal::Device, fmt: OutputFormat, ring_sample: DeviceSample, mut source: RingSource, share: ShareMode) -> Result<CpalStream, OutputError> {
-    let (id, name, transport) = describe(dev);
+    let (id, name, transport) = describe_resolved(dev);
     let config = StreamConfig { channels: fmt.channels, sample_rate: fmt.sample_rate, buffer_size: BufferSize::Default };
     let shared = source.shared().clone();
     let on_err = move |e: cpal::Error| {
