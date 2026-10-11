@@ -2,6 +2,7 @@
 pub mod artwork;
 pub mod db;
 pub mod error;
+pub mod tags;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
