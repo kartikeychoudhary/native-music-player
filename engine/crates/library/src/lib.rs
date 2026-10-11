@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use protocol::Folder;
-use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, Connection, TransactionBehavior};
 
 pub use error::{LibError, Result};
 
@@ -80,29 +80,34 @@ impl Library {
     #[doc(hidden)]
     pub fn conn(&self) -> MutexGuard<'_, Connection> { self.conn.lock().unwrap_or_else(|p| p.into_inner()) }
 
-    fn folder_row(conn: &Connection, id: i64) -> Result<Option<Folder>> {
-        Ok(conn
-            .query_row(
-                "SELECT f.id, f.path, f.last_scan_at,
-                        (SELECT COUNT(*) FROM tracks t WHERE t.folder_id = f.id AND t.missing_since IS NULL)
-                 FROM folders f WHERE f.id = ?1",
-                [id],
-                |r| {
-                    let path: String = r.get(1)?;
-                    Ok(Folder { id: r.get(0)?, available: Path::new(&path).is_dir(), path, last_scan_at: r.get(2)?, track_count: r.get::<_, i64>(3)? as u64 })
-                },
-            )
-            .optional()?)
+    /// Folder rows matching `filter` (SQL after `WHERE`). `available` is filled in by the callers
+    /// after they release the connection: a stat of an unplugged network drive can take seconds.
+    fn folder_rows(conn: &Connection, filter: &str, args: impl rusqlite::Params) -> Result<Vec<Folder>> {
+        let sql = format!(
+            "SELECT f.id, f.path, f.last_scan_at,
+                    (SELECT COUNT(*) FROM tracks t WHERE t.folder_id = f.id AND t.missing_since IS NULL)
+             FROM folders f WHERE {filter} ORDER BY f.path"
+        );
+        let rows = conn
+            .prepare(&sql)?
+            .query_map(args, |r| Ok(Folder { id: r.get(0)?, path: r.get(1)?, last_scan_at: r.get(2)?, track_count: r.get::<_, i64>(3)? as u64, available: false }))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    fn with_availability(mut f: Folder) -> Folder {
+        f.available = Path::new(&f.path).is_dir();
+        f
     }
 
     pub fn folder(&self, id: i64) -> Result<Folder> {
-        Self::folder_row(&self.conn(), id)?.ok_or_else(|| LibError::NotFound(format!("folder {id}")))
+        let row = Self::folder_rows(&self.conn(), "f.id = ?1", [id])?.pop();
+        row.map(Self::with_availability).ok_or_else(|| LibError::NotFound(format!("folder {id}")))
     }
 
     pub fn folders(&self) -> Result<Vec<Folder>> {
-        let conn = self.conn();
-        let ids = conn.prepare("SELECT id FROM folders ORDER BY path")?.query_map([], |r| r.get::<_, i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        ids.into_iter().filter_map(|id| Self::folder_row(&conn, id).transpose()).collect()
+        let rows = Self::folder_rows(&self.conn(), "1", [])?;
+        Ok(rows.into_iter().map(Self::with_availability).collect())
     }
 
     fn insert_folder(&self, path: &str) -> Result<Folder> {
