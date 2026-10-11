@@ -1,8 +1,8 @@
 import { FolderOpen } from 'lucide-react'
 import { usePlayer } from '../stores/player'
-import s from './Home.module.css'
+import s from './HomeView.module.css'
 
-export function Home() {
+export function HomeView() {
   const queue = usePlayer((p) => p.queue)
   const current = usePlayer((p) => p.state.queueIndex)
   const { openFiles, playItem, playPaths, api } = usePlayer.getState()

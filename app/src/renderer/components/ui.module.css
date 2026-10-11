@@ -1,0 +1,18 @@
+.art { display: block; object-fit: cover; border-radius: var(--radius-sm); background: var(--raised); }
+.artFallback { display: grid; place-items: center; border-radius: var(--radius-sm); color: #17151a; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+.menu { position: fixed; z-index: 50; min-width: 200px; padding: 4px; background: var(--raised); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 12px 32px rgb(0 0 0 / 0.45); }
+.menuItem { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 10px; border-radius: var(--radius-sm); text-align: left; }
+.menuItem[data-active='true'] { background: var(--raised-2); color: var(--accent); }
+.menuItem[aria-disabled='true'] { opacity: 0.4; cursor: default; }
+.menuItem .chevron { margin-left: auto; color: var(--text-muted); }
+.separator { height: 1px; margin: 4px 6px; background: var(--border); }
+.toasts { position: fixed; right: 18px; bottom: calc(var(--bar) + 14px); z-index: 60; display: flex; flex-direction: column; gap: 8px; }
+.toast { display: flex; align-items: flex-start; gap: 10px; max-width: 420px; padding: 10px 12px; background: var(--raised); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: var(--radius); }
+.toast[data-kind='error'] { border-left-color: var(--danger); }
+.backdrop { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; background: rgb(0 0 0 / 0.5); }
+.dialog { width: min(560px, calc(100vw - 48px)); max-height: calc(100vh - 96px); overflow: auto; padding: 20px 22px; background: var(--raised); border: 1px solid var(--border); border-radius: var(--radius); }
+.dialog h2 { margin: 0 0 14px; font-size: 16px; }
+.field { width: 100%; padding: 8px 10px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); font: inherit; }
+.actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+.primary { padding: 7px 14px; border-radius: var(--radius-sm); background: var(--accent); color: #17151a; font-weight: 700; }
+.secondary { padding: 7px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border); }

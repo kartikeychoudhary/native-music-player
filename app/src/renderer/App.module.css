@@ -1,5 +1,0 @@
-.app { display: grid; grid-template-columns: var(--rail) 1fr; grid-template-rows: var(--titlebar) 1fr var(--bar); height: 100vh; }
-.titlebar { grid-column: 1 / -1; display: flex; align-items: center; padding: 0 16px; background: var(--surface); border-bottom: 1px solid var(--border); color: var(--text-faint); font-size: 11px; letter-spacing: 0.12em; }
-.app[data-platform='darwin'] .titlebar { padding-left: 84px; }
-.main { overflow: auto; padding: 24px 28px; }
-.app > footer { grid-column: 1 / -1; }

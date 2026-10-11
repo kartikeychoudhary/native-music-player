@@ -24,7 +24,7 @@ test('open → play → signal path → bit-perfect', async () => {
   await expect(win.getByTestId('format-badge')).toHaveText('FLAC 24/96')
   await expect(win.getByRole('button', { name: 'Pause' })).toBeVisible()
 
-  await win.getByRole('button', { name: 'Signal path' }).click()
+  await win.getByRole('link', { name: 'Signal path' }).click()
   await expect(win.getByTestId('signal-output')).toContainText('Null Output')
 
   await win.getByRole('button', { name: 'Pause' }).click()

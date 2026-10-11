@@ -16,7 +16,6 @@ export interface PlayerStore {
   devices: DeviceInfo[]
   engine: EngineStatus
   error: EngineErrorEvent | null
-  panel: 'queue' | 'signal'
   connect(api: AuroraApi): () => void
   openFiles(): Promise<void>
   playPaths(paths: string[]): Promise<void>
@@ -28,7 +27,6 @@ export interface PlayerStore {
   setVolume(v: number): Promise<void>
   setMode(m: OutputMode): Promise<void>
   setDevice(id: string | null): Promise<void>
-  setPanel(p: 'queue' | 'signal'): void
   dismissError(): void
 }
 
@@ -69,7 +67,6 @@ export const usePlayer = create<PlayerStore>()((set, get) => {
     devices: [],
     engine: { state: 'starting' },
     error: null,
-    panel: 'queue',
 
     connect(api) {
       set({ api })
@@ -139,7 +136,6 @@ export const usePlayer = create<PlayerStore>()((set, get) => {
     },
     async setMode(mode) { await safe(call('player.setMode', { mode })) },
     async setDevice(id) { await safe(call('player.setDevice', { id })) },
-    setPanel: (panel) => set({ panel }),
     dismissError: () => set({ error: null }),
   }
 })

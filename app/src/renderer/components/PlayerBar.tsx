@@ -1,3 +1,4 @@
+import { useNavigate } from '@tanstack/react-router'
 import { Disc3, ListMusic, Volume2, VolumeX } from 'lucide-react'
 import { usePlayer } from '../stores/player'
 import { DevicePicker } from './DevicePicker'
@@ -10,7 +11,8 @@ export function PlayerBar() {
   const state = usePlayer((p) => p.state)
   const signal = usePlayer((p) => p.signal)
   const bitPerfect = state.mode === 'bitPerfect'
-  const { setVolume, setMode, setPanel } = usePlayer.getState()
+  const navigate = useNavigate()
+  const { setVolume, setMode } = usePlayer.getState()
   return (
     <footer className={s.bar}>
       <div className={s.now}>
@@ -26,7 +28,7 @@ export function PlayerBar() {
       </div>
       <div className={s.right}>
         <FormatBadges signal={signal} />
-        <button className={s.icon} aria-label="Queue" onClick={() => setPanel('queue')}><ListMusic size={16} /></button>
+        <button className={s.icon} aria-label="Queue" onClick={() => void navigate({ to: '/' })}><ListMusic size={16} /></button>
         <DevicePicker />
         <button
           role="switch" aria-checked={bitPerfect} aria-label="Bit-perfect" className={s.switch}

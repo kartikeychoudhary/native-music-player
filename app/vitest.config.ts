@@ -10,5 +10,5 @@ export default defineConfig({
       '@protocol': fileURLToPath(new URL('../shared/protocol', import.meta.url)),
     },
   },
-  test: { include: ['test/**/*.test.{ts,tsx}'], environment: 'node' },
+  test: { include: ['test/**/*.test.{ts,tsx}'], environment: 'node', setupFiles: ['test/setup.ts'] },
 })
