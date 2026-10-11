@@ -6,7 +6,8 @@ import { Dialog } from './Dialog'
 import s from './ui.module.css'
 
 const db = (v: number | null) => (v == null ? '—' : `${v.toFixed(2)} dB`)
-const mb = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
+const gain = (g: number | null, peak: number | null) => `${db(g)} · peak ${peak == null ? '—' : peak.toFixed(3)}`
+const mb =(bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 const date = (ms: number | null) => (ms == null ? '—' : new Date(ms).toLocaleString())
 
 export function TrackInfoDialog() {
@@ -36,8 +37,11 @@ function TrackInfoBody({ id }: { id: number }) {
     [S.info.bitDepth, t.bitDepth ? `${t.bitDepth}-bit` : '—', true],
     [S.info.channels, t.channels ?? '—', true],
     [S.info.gapless, d.gapless ? `${d.gapless.delay} / ${d.gapless.padding}` : '—', true],
-    [S.info.replayGain, `${db(d.replayGain.trackGain)} / ${db(d.replayGain.albumGain)}`, true],
-    [S.info.musicbrainz, d.musicbrainz.recording ?? '—', true],
+    [S.info.replayGainTrack, gain(d.replayGain.trackGain, d.replayGain.trackPeak), true],
+    [S.info.replayGainAlbum, gain(d.replayGain.albumGain, d.replayGain.albumPeak), true],
+    [S.info.mbRecording, d.musicbrainz.recording ?? '—', true],
+    [S.info.mbRelease, d.musicbrainz.release ?? '—', true],
+    [S.info.mbArtist, d.musicbrainz.artist ?? '—', true],
     [S.info.lyrics, d.hasLyrics ? S.info.yes : S.info.no],
     [S.info.path, t.path, true],
     [S.info.size, mb(d.sizeBytes), true],

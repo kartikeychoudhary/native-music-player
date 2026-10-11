@@ -85,10 +85,10 @@ export const S = Object.freeze({
   clearQueue: 'Clear queue',
   dragHandle: 'Drag to reorder',
   info: {
-    title: 'Title', artists: 'Artists', album: 'Album', albumArtist: 'Album artist', trackDisc: 'Track / disc', year: 'Year',
+    artists: 'Artists', album: 'Album', albumArtist: 'Album artist', trackDisc: 'Track / disc', year: 'Year',
     genres: 'Genres', composer: 'Composer', duration: 'Duration', format: 'Format', bitrate: 'Bitrate', sampleRate: 'Sample rate',
-    bitDepth: 'Bit depth', channels: 'Channels', gapless: 'Gapless (delay / padding)', replayGain: 'ReplayGain (track / album)',
-    musicbrainz: 'MusicBrainz recording', lyrics: 'Lyrics', path: 'File', size: 'Size', modified: 'Modified', added: 'Added',
+    bitDepth: 'Bit depth', channels: 'Channels', gapless: 'Gapless (delay / padding)', replayGainTrack: 'ReplayGain (track)', replayGainAlbum: 'ReplayGain (album)',
+    mbRecording: 'MusicBrainz recording', mbRelease: 'MusicBrainz release', mbArtist: 'MusicBrainz artist', lyrics: 'Lyrics', path: 'File', size: 'Size', modified: 'Modified', added: 'Added',
     plays: 'Plays', lastPlayed: 'Last played', status: 'Status', yes: 'Yes', no: 'No', close: 'Close',
   },
   col: { index: '#', title: 'Title', artist: 'Artist', album: 'Album', format: 'Format', duration: 'Time', plays: 'Plays', added: 'Added' },
