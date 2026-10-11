@@ -236,3 +236,30 @@ fn unicode_folder_paths_work_end_to_end() {
     let st = e.notified("player.state", |p| p["status"] == "playing");
     assert!(st["track"]["path"].as_str().unwrap().contains("日本語"));
 }
+
+#[test]
+fn removing_a_folder_during_its_scan_ends_the_scan_promptly_and_quietly() {
+    let data = tempfile::tempdir().unwrap();
+    let music = tempfile::tempdir().unwrap();
+    // Enough files that the scan is still reading when the remove arrives. Hard links keep this cheap.
+    for i in 0..3000 {
+        let dest = music.path().join(format!("t{i:04}.flac"));
+        if std::fs::hard_link(fixture("short_a.flac"), &dest).is_err() { std::fs::copy(fixture("short_a.flac"), &dest).unwrap(); }
+    }
+    let mut e = with_library(data.path());
+    let folder = e.ok("library.addFolder", json!({ "path": music.path() }))["id"].clone();
+    e.notified("library.scanProgress", |p| p["phase"] == "reading" && p["total"].as_u64() > Some(0));
+    e.seen.clear();
+    let start = std::time::Instant::now();
+    e.ok("library.removeFolder", json!({ "id": folder }));
+    let took = start.elapsed();
+    assert!(took < std::time::Duration::from_secs(1), "removeFolder took {took:?}");
+    let done = e.notified("library.scanProgress", |p| p["phase"] == "done");
+    assert!(done["processed"].as_u64() < done["total"].as_u64(), "the scan was cut short: {done}");
+    // Give a late "scan failed" error time to arrive, then check none did.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert!(e.ok("library.folders", json!({})).as_array().unwrap().is_empty());
+    assert_eq!(e.ok("library.tracks", json!({}))["total"], 0);
+    let errors: Vec<&Value> = e.all.iter().filter(|v| v["method"] == "engine.error").collect();
+    assert!(errors.is_empty(), "no engine.error expected: {errors:?}");
+}

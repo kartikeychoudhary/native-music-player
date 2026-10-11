@@ -289,3 +289,31 @@ fn unreadable_folder_is_not_marked_missing() {
     assert_eq!(count(&fx.lib.conn(), "SELECT COUNT(*) FROM tracks WHERE missing_since IS NOT NULL"), 0);
     assert_eq!(scan(&fx).unchanged, 3);
 }
+
+#[test]
+fn cancelled_scan_still_ends_with_a_terminal_phase() {
+    let fx = setup();
+    build_tree(&root(&fx));
+    let cancel = AtomicBool::new(false);
+    let mut phases = vec![];
+    let err = fx.lib.scanner(ScanOptions::default()).unwrap()
+        .scan(fx.folder, &[], true, &mut |p| {
+            phases.push(p.phase);
+            if p.phase == ScanPhase::Reading { cancel.store(true, std::sync::atomic::Ordering::Relaxed); }
+        }, &cancel)
+        .unwrap_err();
+    assert!(matches!(err, library::LibError::Cancelled));
+    assert_eq!(phases.first(), Some(&ScanPhase::Walking));
+    assert_eq!(phases.last(), Some(&ScanPhase::Done), "a cancelled scan still tells clients it's over: {phases:?}");
+    assert_eq!(count(&fx.lib.conn(), "SELECT COUNT(*) FROM tracks"), 0);
+}
+
+#[test]
+fn scan_of_an_unknown_folder_fails_before_any_progress() {
+    let fx = setup();
+    let mut events = 0;
+    let err = fx.lib.scanner(ScanOptions::default()).unwrap().scan(fx.folder + 1, &[], true, &mut |_| events += 1, &AtomicBool::new(false)).unwrap_err();
+    assert!(matches!(err, library::LibError::NotFound(_)));
+    assert_eq!(events, 0);
+}
+

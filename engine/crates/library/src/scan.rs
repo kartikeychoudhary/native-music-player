@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use protocol::{Palette, ScanPhase, ScanProgress};
 use rayon::prelude::*;
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 
 use crate::tags::{self, AudioProps, TrackTags};
 use crate::{artwork, codec, db, LibError, Result};
@@ -76,7 +76,8 @@ fn candidate(path: PathBuf, errored: &mut Vec<PathBuf>) -> Option<Candidate> {
 
 /// Collects audio files and folder covers under `root`. Paths that couldn't be read (walk or
 /// metadata errors) go to `errored`: what the scan can't see there is unknown, not gone.
-fn walk(root: &Path, files: &mut Vec<Candidate>, covers: &mut Covers, errored: &mut Vec<PathBuf>) {
+/// Stops early once `cancel` is set (the caller checks it afterwards).
+fn walk(root: &Path, files: &mut Vec<Candidate>, covers: &mut Covers, errored: &mut Vec<PathBuf>, cancel: &AtomicBool) {
     if root.is_file() {
         if tags::is_audio(root) { files.extend(candidate(root.to_path_buf(), errored)); }
         if let Some(Ok(entries)) = root.parent().map(std::fs::read_dir) {
@@ -86,6 +87,7 @@ fn walk(root: &Path, files: &mut Vec<Candidate>, covers: &mut Covers, errored: &
     }
     if !root.is_dir() { return; }
     for entry in jwalk::WalkDir::new(root).skip_hidden(true).follow_links(false) {
+        if cancel.load(Ordering::Relaxed) { return; }
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
@@ -277,26 +279,46 @@ fn upsert(tx: &Transaction, folder_id: i64, r: &ReadFile, art_hash: Option<&str>
     Ok(())
 }
 
+fn cancelled(cancel: &AtomicBool) -> Result<()> {
+    if cancel.load(Ordering::Relaxed) { Err(LibError::Cancelled) } else { Ok(()) }
+}
+
+/// Runs one scan. Every scan that reports progress ends with a `Done` event, also when it fails or
+/// is cancelled, so a client's "Scanning…" status never outlives it. An unknown folder fails before
+/// any progress.
 #[allow(clippy::too_many_arguments)]
 fn scan(
     conn: &mut Connection, art_dir: &Path, folder_id: i64, roots: &[PathBuf], full: bool, opts: &ScanOptions,
     progress: &mut dyn FnMut(&ScanProgress), cancel: &AtomicBool,
 ) -> Result<ScanSummary> {
-    let now = opts.now.unwrap_or_else(crate::unix_now);
-    let mut prog = ScanProgress { folder_id, phase: ScanPhase::Walking, processed: 0, total: 0, added: 0, updated: 0, missing: 0 };
-    progress(&prog);
     let folder_root: String = conn
         .query_row("SELECT path FROM folders WHERE id = ?1", [folder_id], |r| r.get(0))
         .optional()?
         .ok_or_else(|| LibError::NotFound(format!("folder {folder_id}")))?;
+    let mut prog = ScanProgress { folder_id, phase: ScanPhase::Walking, processed: 0, total: 0, added: 0, updated: 0, missing: 0 };
+    progress(&prog);
+    let result = run_scan(conn, art_dir, folder_id, &folder_root, roots, full, opts, &mut prog, progress, cancel);
+    prog.phase = ScanPhase::Done;
+    if let Ok(s) = &result { prog.missing = s.missing; }
+    progress(&prog);
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_scan(
+    conn: &mut Connection, art_dir: &Path, folder_id: i64, folder_root: &str, roots: &[PathBuf], full: bool, opts: &ScanOptions,
+    prog: &mut ScanProgress, progress: &mut dyn FnMut(&ScanProgress), cancel: &AtomicBool,
+) -> Result<ScanSummary> {
+    let now = opts.now.unwrap_or_else(crate::unix_now);
     // Re-collecting the components normalizes separators (callers may mix slash styles on Windows), so path keys match the DB.
-    let roots: Vec<PathBuf> = if roots.is_empty() { vec![PathBuf::from(&folder_root)] } else { roots.iter().map(|r| r.components().collect()).collect() };
+    let roots: Vec<PathBuf> = if roots.is_empty() { vec![PathBuf::from(folder_root)] } else { roots.iter().map(|r| r.components().collect()).collect() };
 
     let mut files = vec![];
     let mut covers = Covers::new();
     let mut errored = vec![];
-    for root in &roots { walk(root, &mut files, &mut covers, &mut errored); }
-    files.retain(|c| c.path.starts_with(&folder_root));
+    for root in &roots { walk(root, &mut files, &mut covers, &mut errored, cancel); }
+    cancelled(cancel)?;
+    files.retain(|c| c.path.starts_with(folder_root));
     files.sort_by(|a, b| a.key.cmp(&b.key));
     files.dedup_by(|a, b| a.key == b.key);
 
@@ -318,21 +340,28 @@ fn scan(
 
     prog.phase = ScanPhase::Reading;
     prog.total = to_read.len() as u64;
-    progress(&prog);
+    progress(prog);
     let mut last = Instant::now();
     let mut rest = to_read;
     while !rest.is_empty() {
-        if cancel.load(Ordering::Relaxed) { return Err(LibError::Cancelled); }
+        cancelled(cancel)?;
         let batch: Vec<Candidate> = rest.drain(..BATCH.min(rest.len())).collect();
         let n = batch.len() as u64;
-        let mut reads: Vec<ReadFile> = batch.into_par_iter().map(|c| read_one(c, &covers, opts.fallback.as_ref())).collect();
+        // Files are checked one by one so a cancel lands within a file's read, not a whole batch.
+        let mut reads: Vec<ReadFile> = batch
+            .into_par_iter()
+            .filter_map(|c| (!cancel.load(Ordering::Relaxed)).then(|| read_one(c, &covers, opts.fallback.as_ref())))
+            .collect();
+        cancelled(cancel)?;
         let (hashes, new_art) = prepare_art(conn, art_dir, &mut reads)?;
-        let tx = conn.transaction()?;
+        cancelled(cancel)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         for (h, pal) in &new_art {
             tx.prepare_cached("INSERT OR IGNORE INTO artwork(hash, dominant, vibrant, muted) VALUES (?1, ?2, ?3, ?4)")?
                 .execute(params![h, pal.dominant, pal.vibrant, pal.muted])?;
         }
         for (r, h) in reads.iter().zip(&hashes) {
+            cancelled(cancel)?; // dropping `tx` rolls the batch back
             upsert(&tx, folder_id, r, h.as_deref(), now)?;
             if existing.contains_key(&r.cand.key) { summary.updated += 1 } else { summary.added += 1 }
         }
@@ -340,12 +369,12 @@ fn scan(
         prog.processed += n;
         prog.added = summary.added;
         prog.updated = summary.updated;
-        if last.elapsed() >= PROGRESS_EVERY { progress(&prog); last = Instant::now(); }
+        if last.elapsed() >= PROGRESS_EVERY { progress(prog); last = Instant::now(); }
     }
 
     prog.phase = ScanPhase::Finishing;
-    progress(&prog);
-    let tx = conn.transaction()?;
+    progress(prog);
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     for id in restore {
         tx.execute("UPDATE tracks SET missing_since = NULL WHERE id = ?1", [id])?;
         summary.restored += 1;
@@ -367,10 +396,6 @@ fn scan(
     // Keeps planner statistics current so the paging/search queries stay under the 50 ms target.
     conn.execute_batch("PRAGMA optimize")?;
     for h in orphaned_art { artwork::remove_files(art_dir, &h); }
-
-    prog.phase = ScanPhase::Done;
-    prog.missing = summary.missing;
-    progress(&prog);
     Ok(summary)
 }
 

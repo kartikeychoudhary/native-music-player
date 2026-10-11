@@ -1,5 +1,6 @@
 //! Owns the library on the engine side: a scan worker thread (its own DB connection), the folder
 //! watcher, and the notifications they produce.
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 use std::sync::{Arc, Mutex};
@@ -52,7 +53,20 @@ pub fn notify_error(out: &Writer, code: ErrorCode, message: String) {
 enum Msg { Scan(ScanJob), Stop }
 
 #[derive(Default)]
-struct WorkerState { scanning: Mutex<Option<i64>>, cancel: AtomicBool, stopping: AtomicBool }
+struct Jobs {
+    /// The folder being scanned right now.
+    scanning: Option<i64>,
+    /// Folders being or already removed: their queued jobs are dropped and their scan errors are
+    /// expected (rows vanish under the scan), not reported.
+    removed: HashSet<i64>,
+}
+
+#[derive(Default)]
+struct WorkerState { jobs: Mutex<Jobs>, cancel: AtomicBool, stopping: AtomicBool }
+
+/// How long `remove_folder` waits for a cancelled scan to stop. Cancellation lands within a file's
+/// read, so this is a safety cap; a scan that outlives it fails quietly once its folder is gone.
+const CANCEL_WAIT: Duration = Duration::from_secs(1);
 
 pub struct LibraryService {
     pub lib: Arc<Library>,
@@ -73,16 +87,26 @@ fn scan_worker(mut scanner: Scanner, rx: Receiver<Msg>, out: Arc<Writer>, state:
         }
         for job in coalesce(jobs) {
             if state.stopping.load(SeqCst) { return; }
-            state.cancel.store(false, SeqCst);
-            *state.scanning.lock().unwrap() = Some(job.folder_id);
+            {
+                let mut jobs = state.jobs.lock().unwrap();
+                if jobs.removed.contains(&job.folder_id) { continue; }
+                jobs.scanning = Some(job.folder_id);
+                state.cancel.store(false, SeqCst);
+            }
+            // The scanner ends every scan it started with a `done` progress event, even on error.
             let result = scanner.scan(job.folder_id, &job.roots, job.full, &mut |p| out.notify("library.scanProgress", p), &state.cancel);
-            *state.scanning.lock().unwrap() = None;
+            let removed = {
+                let mut jobs = state.jobs.lock().unwrap();
+                jobs.scanning = None;
+                jobs.removed.contains(&job.folder_id)
+            };
             match result {
                 Ok(s) => {
                     let any = s.added + s.updated + s.missing + s.restored + s.purged > 0;
                     if any { changed(&out, &[LibraryScope::Tracks, LibraryScope::Folders]); }
                 }
                 Err(LibError::Cancelled) | Err(LibError::NotFound(_)) => {}
+                Err(_) if removed => {}
                 Err(e) => notify_error(&out, e.code(), format!("Library scan failed: {e}")),
             }
         }
@@ -147,6 +171,8 @@ impl LibraryService {
 
     pub fn add_folder(&self, path: &Path) -> Result<Folder, LibError> {
         let f = self.lib.add_folder(path)?;
+        // Folder ids can be reused after a removal.
+        self.state.jobs.lock().unwrap().removed.remove(&f.id);
         let root = PathBuf::from(&f.path);
         self.roots.lock().unwrap().push((f.id, root.clone()));
         if let Some(w) = self.watcher.lock().unwrap().as_mut() && let Err(e) = w.watch(&root) {
@@ -157,18 +183,29 @@ impl LibraryService {
         Ok(f)
     }
 
+    /// Cancels the folder's scan (and drops its queued ones), deletes it from the library, then stops
+    /// watching it.
     pub fn remove_folder(&self, id: i64) -> Result<(), LibError> {
         let root = PathBuf::from(self.lib.folder(id)?.path);
-        if *self.state.scanning.lock().unwrap() == Some(id) {
-            self.state.cancel.store(true, SeqCst);
-            let deadline = Instant::now() + Duration::from_secs(5);
-            while *self.state.scanning.lock().unwrap() == Some(id) && Instant::now() < deadline {
+        let scanning = {
+            let mut jobs = self.state.jobs.lock().unwrap();
+            jobs.removed.insert(id);
+            let scanning = jobs.scanning == Some(id);
+            if scanning { self.state.cancel.store(true, SeqCst); }
+            scanning
+        };
+        if scanning {
+            let deadline = Instant::now() + CANCEL_WAIT;
+            while self.state.jobs.lock().unwrap().scanning == Some(id) && Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
+        if let Err(e) = self.lib.remove_folder(id) {
+            self.state.jobs.lock().unwrap().removed.remove(&id);
+            return Err(e);
+        }
         if let Some(w) = self.watcher.lock().unwrap().as_mut() { let _ = w.unwatch(&root); }
         self.roots.lock().unwrap().retain(|(f, _)| *f != id);
-        self.lib.remove_folder(id)?;
         changed(&self.out, &[LibraryScope::Folders, LibraryScope::Tracks]);
         Ok(())
     }
