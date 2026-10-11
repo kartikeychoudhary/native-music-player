@@ -4,6 +4,8 @@ pub mod codec;
 pub mod db;
 pub mod error;
 pub mod palette;
+pub mod query;
+mod rows;
 pub mod scan;
 pub mod tags;
 

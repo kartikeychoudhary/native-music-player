@@ -55,3 +55,42 @@ pub fn png(w: u32, h: u32, rgb: [u8; 3]) -> Vec<u8> {
     image::DynamicImage::ImageRgb8(img).write_to(&mut out, image::ImageFormat::Png).unwrap();
     out.into_inner()
 }
+
+pub struct Scanned { pub data: tempfile::TempDir, pub music: tempfile::TempDir, pub lib: library::Library, pub folder: i64 }
+
+impl Scanned {
+    pub fn root(&self) -> PathBuf { PathBuf::from(&self.lib.folder(self.folder).unwrap().path) }
+    pub fn rescan(&self) {
+        self.lib.scanner(Default::default()).unwrap().scan(self.folder, &[], true, &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).unwrap();
+    }
+    pub fn id_of(&self, title: &str) -> i64 {
+        self.lib.conn().query_row("SELECT id FROM tracks WHERE title = ?1", [title], |r| r.get(0)).unwrap()
+    }
+}
+
+/// A library in a temp dir with one folder, populated by `build(root)` and scanned once.
+pub fn scanned(build: impl FnOnce(&Path)) -> Scanned {
+    let data = tempfile::tempdir().unwrap();
+    let music = tempfile::tempdir().unwrap();
+    let (lib, _) = library::Library::open(data.path()).unwrap();
+    let folder = lib.add_folder(music.path()).unwrap().id;
+    let s = Scanned { data, music, lib, folder };
+    build(&s.root());
+    s.rescan();
+    s
+}
+
+/// Four albums, three artists, three genres:
+/// Alpha/First Light (2001, Ambient): 1 Dawn, 2 Noon (Alpha + Beta; album artist Alpha), disc 2 track 1 Encore
+/// Alpha/Zenith (1999, Rock): 1 Peak
+/// Beta/Bridges (2010, Ambient): 1 Span
+/// The Gamma/Night (no year, Jazz, MP3): 1 Dusk
+pub fn demo_tree(root: &Path) {
+    let t = |src: &str, rel: &str, tags: Tags| { tagged(src, &root.join(rel), &tags); };
+    t("flac16_44k.flac", "Alpha/First Light/01.flac", Tags { title: Some("Dawn"), artists: &["Alpha"], album: Some("First Light"), track: Some(1), disc: Some(1), date: Some("2001"), genres: &["Ambient"], ..Default::default() });
+    t("flac16_44k.flac", "Alpha/First Light/02.flac", Tags { title: Some("Noon"), artists: &["Alpha", "Beta"], album_artist: Some("Alpha"), album: Some("First Light"), track: Some(2), disc: Some(1), genres: &["Ambient"], ..Default::default() });
+    t("flac24_96k.flac", "Alpha/First Light/2-01.flac", Tags { title: Some("Encore"), artists: &["Alpha"], album: Some("First Light"), track: Some(1), disc: Some(2), genres: &["Ambient"], ..Default::default() });
+    t("flac16_44k.flac", "Alpha/Zenith/01.flac", Tags { title: Some("Peak"), artists: &["Alpha"], album: Some("Zenith"), track: Some(1), date: Some("1999"), genres: &["Rock"], ..Default::default() });
+    t("flac16_44k.flac", "Beta/Bridges/01.flac", Tags { title: Some("Span"), artists: &["Beta"], album: Some("Bridges"), track: Some(1), date: Some("2010"), genres: &["Ambient"], ..Default::default() });
+    t("mp3_320.mp3", "The Gamma/Night/01.mp3", Tags { title: Some("Dusk"), artists: &["The Gamma"], album: Some("Night"), track: Some(1), genres: &["Jazz"], ..Default::default() });
+}
