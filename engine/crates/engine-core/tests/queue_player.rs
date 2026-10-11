@@ -297,3 +297,15 @@ fn next_past_the_last_entry_stops_and_rewinds_to_the_top() {
     p.send(Command::Next);
     wait_for(&p, |s| s.queue_index == Some(1) && s.status == PlaybackStatus::Playing);
 }
+
+#[test]
+fn repeat_one_reports_the_restart_position_promptly() {
+    let (p, h, _rx) = setup();
+    p.send(Command::SetRepeat(RepeatMode::One));
+    play(&p, &["gap_a.flac"]); // 2.51 s
+    wait_for(&p, |s| s.status == PlaybackStatus::Playing);
+    pull_frames(&h, GAP_A + 22_050); // 0.5 s into the replay
+    std::thread::sleep(Duration::from_millis(400));
+    let s = p.state();
+    assert!(s.position_ms >= 400 && s.position_ms <= 700, "position after the wrap: {} ms", s.position_ms);
+}
