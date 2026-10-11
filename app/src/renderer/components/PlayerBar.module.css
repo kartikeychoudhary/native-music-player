@@ -4,11 +4,12 @@
 .title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
 .center { display: flex; flex-direction: column; align-items: center; gap: 6px; }
-.right { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
-.icon { color: var(--text-muted); }
+.right { display: flex; align-items: center; justify-content: flex-end; gap: 12px; --control-h: 24px; }
+/* Icons are flex-centred: as inline content they'd sit on the text baseline, above the row's centre. */
+.icon { display: inline-flex; align-items: center; justify-content: center; height: var(--control-h, 24px); color: var(--text-muted); }
 .icon:hover { color: var(--text); }
 .icon[aria-pressed='true'] { color: var(--accent); }
-.switch { font-size: 9.5px; font-weight: 700; padding: 4px 6px; border-radius: var(--radius-sm); border: 1px solid var(--border); color: var(--text-muted); }
+.switch { display: inline-flex; align-items: center; box-sizing: border-box; height: var(--control-h); font-size: 9.5px; font-weight: 700; padding: 0 6px; border-radius: var(--radius-sm); border: 1px solid var(--border); color: var(--text-muted); }
 .switch[aria-checked='true'] { border-color: var(--ok); color: var(--ok); }
-.vol { display: flex; align-items: center; gap: 6px; color: var(--text-muted); }
+.vol { display: flex; align-items: center; height: var(--control-h); gap: 6px; color: var(--text-muted); }
 .vol input { width: 90px; accent-color: var(--accent); }
