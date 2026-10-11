@@ -65,25 +65,40 @@ fn note_cover(covers: &mut Covers, path: PathBuf, name: &str) {
     }
 }
 
-fn candidate(path: PathBuf) -> Option<Candidate> {
-    let (mtime, size) = file_meta(&path)?;
+fn candidate(path: PathBuf, errored: &mut Vec<PathBuf>) -> Option<Candidate> {
+    let Some((mtime, size)) = file_meta(&path) else {
+        tracing::warn!(path = %path.display(), "couldn't read file metadata; leaving its index entry untouched");
+        errored.push(path);
+        return None;
+    };
     Some(Candidate { key: path.to_string_lossy().into_owned(), path, mtime, size })
 }
 
-fn walk(root: &Path, files: &mut Vec<Candidate>, covers: &mut Covers) {
+/// Collects audio files and folder covers under `root`. Paths that couldn't be read (walk or
+/// metadata errors) go to `errored`: what the scan can't see there is unknown, not gone.
+fn walk(root: &Path, files: &mut Vec<Candidate>, covers: &mut Covers, errored: &mut Vec<PathBuf>) {
     if root.is_file() {
-        if tags::is_audio(root) { files.extend(candidate(root.to_path_buf())); }
+        if tags::is_audio(root) { files.extend(candidate(root.to_path_buf(), errored)); }
         if let Some(Ok(entries)) = root.parent().map(std::fs::read_dir) {
             for e in entries.flatten() { note_cover(covers, e.path(), &e.file_name().to_string_lossy()); }
         }
         return;
     }
     if !root.is_dir() { return; }
-    for entry in jwalk::WalkDir::new(root).skip_hidden(true).follow_links(false).into_iter().flatten() {
+    for entry in jwalk::WalkDir::new(root).skip_hidden(true).follow_links(false) {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                let at = e.path().unwrap_or(root).to_path_buf();
+                tracing::warn!(path = %at.display(), error = %e, "couldn't walk directory; leaving its index entries untouched");
+                errored.push(at);
+                continue;
+            }
+        };
         if !entry.file_type().is_file() { continue; }
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
-        if tags::is_audio(&path) { files.extend(candidate(path)); } else { note_cover(covers, path, &name); }
+        if tags::is_audio(&path) { files.extend(candidate(path, errored)); } else { note_cover(covers, path, &name); }
     }
 }
 
@@ -274,7 +289,8 @@ fn scan(
 
     let mut files = vec![];
     let mut covers = Covers::new();
-    for root in &roots { walk(root, &mut files, &mut covers); }
+    let mut errored = vec![];
+    for root in &roots { walk(root, &mut files, &mut covers, &mut errored); }
     files.retain(|c| c.path.starts_with(&folder_root));
     files.sort_by(|a, b| a.key.cmp(&b.key));
     files.dedup_by(|a, b| a.key == b.key);
@@ -329,11 +345,9 @@ fn scan(
         tx.execute("UPDATE tracks SET missing_since = NULL WHERE id = ?1", [id])?;
         summary.restored += 1;
     }
-    for (path, e) in &existing {
-        if !seen.contains(path) && !e.missing {
-            tx.execute("UPDATE tracks SET missing_since = ?1 WHERE id = ?2", params![now, e.id])?;
-            summary.missing += 1;
-        }
+    for id in newly_missing(&existing, &seen, &errored) {
+        tx.execute("UPDATE tracks SET missing_since = ?1 WHERE id = ?2", params![now, id])?;
+        summary.missing += 1;
     }
     if full {
         summary.purged = tx.execute(
@@ -353,4 +367,40 @@ fn scan(
     prog.missing = summary.missing;
     progress(&prog);
     Ok(summary)
+}
+
+/// Ids of present tracks that this scan should mark missing: not seen, and not under a path the
+/// scan failed to read (those are unknown, not gone).
+fn newly_missing(existing: &HashMap<String, Existing>, seen: &HashSet<String>, errored: &[PathBuf]) -> Vec<i64> {
+    existing
+        .iter()
+        .filter(|(path, e)| !e.missing && !seen.contains(*path) && !errored.iter().any(|p| Path::new(path.as_str()).starts_with(p)))
+        .map(|(_, e)| e.id)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ex(id: i64, missing: bool) -> Existing { Existing { id, mtime: 0, size: 0, missing } }
+
+    #[test]
+    fn unreadable_paths_are_not_marked_missing() {
+        let existing: HashMap<String, Existing> = [
+            ("/m/ok/a.flac", ex(1, false)),
+            ("/m/gone/b.flac", ex(2, false)),
+            ("/m/locked/c.flac", ex(3, false)),
+            ("/m/locked/deep/d.flac", ex(4, false)),
+            ("/m/gone/old.flac", ex(5, true)),
+            ("/m/lockedness/e.flac", ex(6, false)),
+        ].into_iter().map(|(p, e)| (p.to_string(), e)).collect();
+        let seen: HashSet<String> = ["/m/ok/a.flac".to_string()].into();
+        let mut ids = newly_missing(&existing, &seen, &[PathBuf::from("/m/locked")]);
+        ids.sort();
+        assert_eq!(ids, vec![2, 6], "vanished files go missing; the errored dir (and below) and already-missing rows don't");
+        let mut all = newly_missing(&existing, &seen, &[]);
+        all.sort();
+        assert_eq!(all, vec![2, 3, 4, 6]);
+    }
 }
