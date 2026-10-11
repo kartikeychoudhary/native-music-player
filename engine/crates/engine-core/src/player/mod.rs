@@ -1,5 +1,6 @@
 pub mod chain;
 pub mod pipeline;
+pub mod queue;
 pub mod signal_path;
 
 use std::collections::VecDeque;
