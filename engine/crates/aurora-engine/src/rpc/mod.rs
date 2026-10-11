@@ -48,6 +48,7 @@ pub fn run() -> i32 {
                 PlayerEvent::Error(e) => out2.notify("engine.error", e),
                 PlayerEvent::DevicesChanged(d) => out2.notify("devices.changed", d),
                 PlayerEvent::Ended => {}
+                PlayerEvent::Played { .. } => {}
             }
         }
     }).expect("spawn event thread");

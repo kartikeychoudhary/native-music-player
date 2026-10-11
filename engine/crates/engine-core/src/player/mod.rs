@@ -21,20 +21,49 @@ use crate::output::ring::{ring_pair, StreamShared};
 use crate::output::{DeviceCaps, OutputBackend, OutputError, OutputStream, StreamInfo};
 use chain::ProcessChain;
 use pipeline::{plan_output, Passthrough, PipelinePlan, PlanInput, EXCLUSIVE_UNAVAILABLE};
+pub use queue::{Entry, NewEntry, Queue};
 use signal_path::build_signal_path;
 
 const MIN_FREE_BYTES: usize = 16 * 1024;
+/// "Played" after half the track or this much listening, whichever comes first.
+pub const PLAYED_MAX_MS: u64 = 240_000;
+
+pub fn played_threshold_ms(duration_ms: Option<u64>) -> u64 {
+    duration_ms.map_or(PLAYED_MAX_MS, |d| (d / 2).min(PLAYED_MAX_MS)).max(1)
+}
 
 #[derive(Debug)]
 pub enum Command {
-    SetQueue { paths: Vec<PathBuf>, start: usize },
+    SetQueue { items: Vec<NewEntry>, start: usize },
+    Add(Vec<NewEntry>),
+    InsertNext(Vec<NewEntry>),
+    Move { from: usize, to: usize },
+    Remove(Vec<u32>),
+    Clear,
+    SetShuffle(bool),
+    SetRepeat(RepeatMode),
+    Restore(Box<Restore>),
     Play(Option<u32>), Pause, Toggle, Stop, Next, Prev,
     Seek(u64), SetVolume(f32), SetMode(OutputMode), SetDevice(Option<String>), Shutdown,
+}
+
+/// A saved session (spec §5.2). The player restores it paused; the first Play opens the stream.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Restore {
+    pub items: Vec<NewEntry>,
+    pub current: usize,
+    pub position_ms: u64,
+    pub shuffle: bool,
+    pub repeat: RepeatMode,
+    pub volume: f32,
+    pub mode: OutputMode,
 }
 
 #[derive(Debug, Clone)]
 pub enum PlayerEvent {
     State(PlayerState), SignalPath(SignalPath), Queue(QueueChanged), Error(EngineErrorEvent), DevicesChanged(Vec<DeviceInfo>), Ended,
+    /// The audible track crossed `played_threshold_ms` of actual listening (once per play).
+    Played { track_id: Option<i64>, path: PathBuf },
 }
 
 #[derive(Clone, Debug)]
@@ -43,9 +72,15 @@ impl Default for PlayerConfig { fn default() -> Self { Self { buffer_secs: 2.0, 
 
 pub struct PlayerHandle { tx: Sender<Command>, state: Arc<Mutex<PlayerState>>, join: Option<JoinHandle<()>> }
 
+/// A cloneable command sender (for OS media keys and other non-RPC sources).
+#[derive(Clone)]
+pub struct Commander(Sender<Command>);
+impl Commander { pub fn send(&self, c: Command) { let _ = self.0.send(c); } }
+
 impl PlayerHandle {
     pub fn send(&self, c: Command) { let _ = self.tx.send(c); }
     pub fn state(&self) -> PlayerState { self.state.lock().unwrap().clone() }
+    pub fn commander(&self) -> Commander { Commander(self.tx.clone()) }
     pub fn shutdown(mut self) {
         let _ = self.tx.send(Command::Shutdown);
         if let Some(j) = self.join.take() { let _ = j.join(); }
@@ -60,14 +95,13 @@ pub fn spawn_player(backend: Arc<dyn OutputBackend>, cfg: PlayerConfig, events: 
     let (tx, rx) = crossbeam_channel::unbounded();
     let state = Arc::new(Mutex::new(PlayerState { volume: 1.0, ..Default::default() }));
     let st = state.clone();
+    let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64);
     let join = std::thread::Builder::new()
         .name("aurora-player".into())
-        .spawn(move || Player::new(backend, cfg, events, st).run(rx))
+        .spawn(move || Player::new(backend, cfg, events, st, seed).run(rx))
         .expect("spawn player thread");
     PlayerHandle { tx, state, join: Some(join) }
 }
-
-struct Entry { id: u32, path: PathBuf, title: String }
 
 /// The open output stream and the producer side of its ring.
 struct Active {
@@ -98,19 +132,27 @@ impl Active {
 struct Feeding { idx: usize, dec: Box<dyn TrackDecoder>, chain: ProcessChain, decoded: u64, eof: bool }
 
 /// Where a track starts in the ring's frame timeline; the front marker is the audible track.
-struct Marker { start: u64, idx: usize, start_ms: u64, out_rate: u32, signal: SignalPath, duration_ms: Option<u64> }
+struct Marker {
+    start: u64, idx: usize, start_ms: u64, out_rate: u32, signal: SignalPath, duration_ms: Option<u64>,
+    /// Listening carried over from before a seek or restart of this same play.
+    listened_carry_ms: u64,
+    /// `Played` was already sent for this play.
+    reported: bool,
+}
 
 /// A track waiting for the ring to drain before the stream is reopened in its format.
 /// `prev` is the format of the stream being replaced (for the gap note).
 struct Reopen { idx: usize, dec: Box<dyn TrackDecoder>, plan: PipelinePlan, prev: Option<OutputFormat> }
+
+/// Queue positions the player holds, captured by entry id before an edit.
+struct Held { cur: Option<u32>, feeding: Option<u32>, prepared: Option<u32>, prepare_failed: Option<u32>, reopen: Option<u32>, shown: Option<u32>, markers: Vec<Option<u32>> }
 
 struct Player {
     backend: Arc<dyn OutputBackend>,
     cfg: PlayerConfig,
     events: Sender<PlayerEvent>,
     shared_state: Arc<Mutex<PlayerState>>,
-    queue: Vec<Entry>,
-    next_id: u32,
+    queue: Queue,
     cur: usize,
     status: PlaybackStatus,
     volume: f32,
@@ -143,18 +185,16 @@ struct Player {
     underrun_times: VecDeque<Instant>,
 }
 
-fn title_of(p: &std::path::Path) -> String { p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default() }
-
 /// Ring size after `recent` underruns within the last 10 s (spec §6: +1 s per burst, max 8 s).
 pub fn grown_buffer(current: f64, recent: usize) -> f64 {
     if recent >= 3 { (current + 1.0).min(8.0) } else { current }
 }
 
 impl Player {
-    fn new(backend: Arc<dyn OutputBackend>, cfg: PlayerConfig, events: Sender<PlayerEvent>, shared_state: Arc<Mutex<PlayerState>>) -> Self {
+    fn new(backend: Arc<dyn OutputBackend>, cfg: PlayerConfig, events: Sender<PlayerEvent>, shared_state: Arc<Mutex<PlayerState>>, seed: u64) -> Self {
         let devices = backend.devices().unwrap_or_default();
         Self {
-            backend, events, shared_state, queue: vec![], next_id: 1, cur: 0, status: PlaybackStatus::Stopped,
+            backend, events, shared_state, queue: Queue::new(seed), cur: 0, status: PlaybackStatus::Stopped,
             volume: 1.0, mode: OutputMode::Processed, device: None, active: None, feeding: None, prepared: None,
             prepare_failed: None, markers: VecDeque::new(), reopen: None, pending_start: false, exclusive_denied: None, last_excl_caps: None, end_pending: false, shown_idx: None, resume_ms: None,
             last_tick: Instant::now(), last_underruns: (0, Instant::now()), last_devices: (devices, Instant::now()),
@@ -181,24 +221,58 @@ impl Player {
 
     fn handle(&mut self, cmd: Command) {
         match cmd {
-            Command::SetQueue { paths, start } => {
+            Command::SetQueue { items, start } => {
                 self.stop_internal();
-                self.queue = paths.into_iter().map(|path| { let id = self.next_id; self.next_id += 1; Entry { id, title: title_of(&path), path } }).collect();
-                self.cur = start.min(self.queue.len().saturating_sub(1));
+                self.cur = self.queue.replace(items, start);
                 self.emit_queue();
                 self.publish(true);
             }
-            Command::Play(Some(id)) => if let Some(i) = self.queue.iter().position(|e| e.id == id) { self.start_at(i, 0) },
+            Command::Add(items) => self.edit_queue(|q, _| { q.add(items); }),
+            Command::InsertNext(items) => self.edit_queue(|q, cur| { q.insert_after(cur, items); }),
+            Command::Move { from, to } => self.edit_queue(|q, _| { q.move_item(from, to); }),
+            Command::Remove(ids) => self.edit_queue(|q, _| { q.remove(&ids); }),
+            Command::SetShuffle(on) => self.edit_queue(|q, cur| q.set_shuffle(on, cur)),
+            Command::SetRepeat(r) => self.edit_queue(|q, _| q.set_repeat(r)),
+            Command::Clear => {
+                self.stop_internal();
+                self.queue.clear();
+                self.cur = 0;
+                self.emit_queue();
+                self.publish(true);
+            }
+            Command::Restore(r) => {
+                let r = *r;
+                self.stop_internal();
+                self.queue.restore(r.items, r.shuffle, r.repeat);
+                self.volume = r.volume.clamp(0.0, 1.0);
+                self.mode = r.mode;
+                self.cur = 0;
+                if !self.queue.is_empty() {
+                    self.cur = r.current.min(self.queue.len() - 1);
+                    self.status = PlaybackStatus::Paused;
+                    self.resume_ms = Some(r.position_ms);
+                }
+                self.emit_queue();
+                self.publish(true);
+            }
+            Command::Play(Some(id)) => if let Some(i) = self.queue.index_of(id) { self.start_at(i, 0) },
             Command::Play(None) => match self.status {
                 PlaybackStatus::Paused => self.resume(),
-                PlaybackStatus::Stopped if !self.queue.is_empty() => self.start_at(self.cur, 0),
+                PlaybackStatus::Stopped if !self.queue.is_empty() => self.start_at(self.cur.min(self.queue.len() - 1), 0),
                 _ => {}
             },
             Command::Pause => self.pause(),
             Command::Toggle => if self.status == PlaybackStatus::Playing { self.pause() } else { self.handle(Command::Play(None)) },
             Command::Stop => { self.stop_internal(); self.publish(true); }
-            Command::Next => { if self.cur + 1 < self.queue.len() { self.start_at(self.cur + 1, 0) } else { self.stop_internal(); self.publish(true) } }
-            Command::Prev => { let target = if self.position_ms() > 3000 { self.cur } else { self.cur.saturating_sub(1) }; if !self.queue.is_empty() { self.start_at(target, 0) } }
+            Command::Next => match self.queue.user_next(self.cur) {
+                Some(n) => self.start_at(n, 0),
+                None => { self.stop_internal(); self.publish(true) }
+            },
+            Command::Prev => {
+                if self.queue.is_empty() { return; }
+                let target = if self.position_ms() > 3000 { Some(self.cur) } else { self.queue.user_prev(self.cur) };
+                if let Some(t) = target { self.start_at(t, 0) }
+            }
             Command::Seek(ms) => self.seek(ms),
             Command::SetVolume(v) => {
                 self.volume = v.clamp(0.0, 1.0);
@@ -219,10 +293,111 @@ impl Player {
         }
     }
 
+    /// Runs a queue edit, then re-resolves every queue position the player holds by entry id.
+    /// If the audible entry was removed, the entry now at its position plays (paused/stopped
+    /// players just move there). If audio already decoded for what follows the audible track no
+    /// longer matches the queue's playback order, the ring is resynced with a same-position seek.
+    fn edit_queue(&mut self, edit: impl FnOnce(&mut Queue, Option<usize>)) {
+        let audible = self.markers.front().map_or(self.cur, |m| m.idx);
+        let audible_id = self.queue.get(audible).map(|e| e.id);
+        let held = self.hold();
+        edit(&mut self.queue, audible_id.map(|_| audible));
+        let audible_now = audible_id.and_then(|id| self.queue.index_of(id));
+        if self.status != PlaybackStatus::Stopped && audible_now.is_none() {
+            let was_playing = self.status == PlaybackStatus::Playing;
+            let next = if audible < self.queue.len() {
+                Some(audible)
+            } else if self.queue.repeat() == RepeatMode::All && !self.queue.is_empty() {
+                Some(0)
+            } else {
+                None
+            };
+            match next {
+                Some(i) if was_playing => self.start_at(i, 0),
+                Some(i) => { self.stop_internal(); self.cur = i; }
+                None => { self.stop_internal(); self.cur = 0; }
+            }
+        } else {
+            let consistent = self.rehome(held);
+            if audible_now.is_none() { self.cur = self.cur.min(self.queue.len().saturating_sub(1)); }
+            if !consistent && self.active.is_some() && self.status != PlaybackStatus::Stopped {
+                let ms = self.position_ms();
+                self.seek(ms);
+            }
+        }
+        self.emit_queue();
+        self.publish(true);
+    }
+
+    fn hold(&self) -> Held {
+        let id = |i: usize| self.queue.get(i).map(|e| e.id);
+        Held {
+            cur: id(self.cur),
+            feeding: self.feeding.as_ref().and_then(|f| id(f.idx)),
+            prepared: self.prepared.as_ref().and_then(|(i, _)| id(*i)),
+            prepare_failed: self.prepare_failed.and_then(id),
+            reopen: self.reopen.as_ref().and_then(|r| id(r.idx)),
+            shown: self.shown_idx.and_then(id),
+            markers: self.markers.iter().map(|m| id(m.idx)).collect(),
+        }
+    }
+
+    /// Points held positions at their entries' new indices. Returns false when audio decoded past
+    /// the audible track (later markers, or a pending reopen) belongs to a removed entry or no
+    /// longer follows the playback order, or when the queue now continues past a track the player
+    /// was draining as the last one.
+    fn rehome(&mut self, h: Held) -> bool {
+        let q = &self.queue;
+        let at = |id: Option<u32>| id.and_then(|id| q.index_of(id));
+        let mut consistent = true;
+        if let Some(i) = at(h.cur) { self.cur = i; }
+        self.shown_idx = at(h.shown);
+        for (m, id) in self.markers.iter_mut().zip(&h.markers) {
+            match at(*id) { Some(i) => m.idx = i, None => consistent = false }
+        }
+        if let Some(f) = self.feeding.as_mut() {
+            match at(h.feeding) { Some(i) => f.idx = i, None => consistent = false }
+        }
+        if let Some(r) = self.reopen.as_mut() {
+            match at(h.reopen) { Some(i) => r.idx = i, None => consistent = false }
+        }
+        let mut expected = self.markers.front().map(|m| m.idx);
+        for idx in self.markers.iter().skip(1).map(|m| m.idx).chain(self.reopen.as_ref().map(|r| r.idx)) {
+            expected = expected.and_then(|e| q.auto_next(e));
+            if expected != Some(idx) { consistent = false; }
+        }
+        let last = self.reopen.as_ref().map(|r| r.idx).or(self.markers.back().map(|m| m.idx));
+        if self.end_pending && last.and_then(|l| q.auto_next(l)).is_some() { consistent = false; }
+        let feed_next = self.feeding.as_ref().and_then(|f| q.auto_next(f.idx));
+        match at(h.prepared).filter(|i| Some(*i) == feed_next) {
+            Some(i) => if let Some((slot, _)) = self.prepared.as_mut() { *slot = i },
+            None => self.prepared = None,
+        }
+        self.prepare_failed = at(h.prepare_failed).filter(|i| Some(*i) == feed_next);
+        consistent
+    }
+
+    /// (listened ms, reported) of the audible play, to carry across a seek or restart.
+    fn take_listen(&self) -> (u64, bool) {
+        match (&self.active, self.markers.front()) {
+            (Some(a), Some(m)) => {
+                let consumed = a.shared.consumed_frames.load(Acquire);
+                (m.listened_carry_ms + consumed.saturating_sub(m.start) * 1000 / m.out_rate.max(1) as u64, m.reported)
+            }
+            _ => (0, false),
+        }
+    }
+
+    fn put_listen(&mut self, (carry, reported): (u64, bool)) {
+        if let Some(m) = self.markers.front_mut() { m.listened_carry_ms = carry; m.reported = reported; }
+    }
+
     fn restart_if_active(&mut self) {
         if self.status == PlaybackStatus::Stopped { return; }
         let (idx, ms, paused) = (self.cur, self.position_ms(), self.status == PlaybackStatus::Paused);
+        let listen = self.take_listen();
         self.start_at(idx, ms);
+        self.put_listen(listen);
         if paused { self.pause(); }
     }
 
@@ -263,7 +438,7 @@ impl Player {
 
     fn open_decoder(&mut self, idx: usize) -> Result<Box<dyn TrackDecoder>, DecodeError> {
         if self.prepared.as_ref().is_some_and(|(i, _)| *i == idx) { return Ok(self.prepared.take().unwrap().1); }
-        decode::open(&self.queue[idx].path)
+        decode::open(&self.queue.entries()[idx].path)
     }
 
     /// Software volume applies only in processed mode. Bit-perfect mode hides the volume control, so
@@ -361,6 +536,13 @@ impl Player {
         }
     }
 
+    /// Starts what follows `idx`: in playback order when the track ended by itself (`natural`, so
+    /// repeat-one replays it), else the next entry (skipping a broken one). Finishes at the end.
+    fn start_after(&mut self, idx: usize, natural: bool) {
+        let next = if natural { self.queue.auto_next(idx) } else { self.queue.user_next(idx) };
+        match next { Some(n) => self.start_at(n, 0), None => self.finish() }
+    }
+
     /// Opens the decoder at `idx` (skipping broken entries), seeks to `ms`, opens a stream and starts feeding.
     fn start_at(&mut self, idx: usize, ms: u64) {
         let keep_prepared = self.prepared.take();
@@ -369,13 +551,24 @@ impl Player {
         self.exclusive_denied = None;
         self.prepared = keep_prepared;
         let (mut idx, mut ms) = (idx, ms);
-        loop {
-            if idx >= self.queue.len() { self.finish(); return; }
-            let mut dec = match self.open_decoder(idx) { Ok(d) => d, Err(e) => { self.track_error(idx, &e); idx += 1; ms = 0; continue; } };
+        for _ in 0..self.queue.len() {
+            if idx >= self.queue.len() { break; }
+            let mut dec = match self.open_decoder(idx) {
+                Ok(d) => d,
+                Err(e) => {
+                    self.track_error(idx, &e);
+                    match self.queue.user_next(idx) { Some(n) => { idx = n; ms = 0; continue; } None => break }
+                }
+            };
             if ms > 0 {
                 let frame = ms * dec.info().spec.sample_rate as u64 / 1000;
-                if dec.info().total_frames.is_some_and(|t| frame >= t) { idx += 1; ms = 0; continue; }
-                if let Err(e) = dec.seek(frame) { self.track_error(idx, &e); idx += 1; ms = 0; continue; }
+                if dec.info().total_frames.is_some_and(|t| frame >= t) {
+                    match self.queue.auto_next(idx) { Some(n) => { idx = n; ms = 0; continue; } None => break }
+                }
+                if let Err(e) = dec.seek(frame) {
+                    self.track_error(idx, &e);
+                    match self.queue.user_next(idx) { Some(n) => { idx = n; ms = 0; continue; } None => break }
+                }
             }
             let plan = self.plan_for(dec.as_mut(), None);
             let plan = match self.open_stream_with_fallback(dec.as_mut(), plan) { Ok(p) => p, Err(e) => { self.output_error(&e); return; } };
@@ -386,6 +579,7 @@ impl Player {
             self.publish(true);
             return;
         }
+        self.finish();
     }
 
     fn begin_feeding(&mut self, idx: usize, dec: Box<dyn TrackDecoder>, plan: PipelinePlan, start_ms: u64, reuse: Option<StreamResampler>) {
@@ -395,6 +589,7 @@ impl Player {
         self.markers.push_back(Marker {
             start: a.written_frames(), idx, start_ms, out_rate: plan.format.sample_rate, signal,
             duration_ms: info.total_frames.map(|f| f * 1000 / info.spec.sample_rate.max(1) as u64),
+            listened_carry_ms: 0, reported: false,
         });
         let chain = ProcessChain::new(plan, info.spec, reuse);
         self.feeding = Some(Feeding { idx, dec, chain, decoded: start_ms * info.spec.sample_rate as u64 / 1000, eof: false });
@@ -473,33 +668,35 @@ impl Player {
 
     fn maybe_prepare_next(&mut self) {
         let Some(feed) = &self.feeding else { return };
-        let next = feed.idx + 1;
-        if next >= self.queue.len() || self.prepared.as_ref().is_some_and(|(i, _)| *i == next) || self.prepare_failed == Some(next) { return; }
+        let Some(next) = self.queue.auto_next(feed.idx) else { return };
+        if self.prepared.as_ref().is_some_and(|(i, _)| *i == next) || self.prepare_failed == Some(next) { return; }
         let info = feed.dec.info();
         let Some(total) = info.total_frames else { return };
         let remaining_secs = total.saturating_sub(feed.decoded) as f64 / info.spec.sample_rate.max(1) as f64;
         if remaining_secs <= self.cfg.preroll_secs {
-            match decode::open(&self.queue[next].path) {
+            match decode::open(&self.queue.entries()[next].path) {
                 Ok(dec) => self.prepared = Some((next, dec)),
                 Err(_) => self.prepare_failed = Some(next),
             }
         }
     }
 
-    /// The feeding decoder hit EOF: continue gaplessly with the next track, schedule a reopen, or end.
+    /// The feeding decoder hit EOF: continue gaplessly with what plays next, schedule a reopen, or end.
     fn advance(&mut self) {
         let mut feed = self.feeding.take().expect("advance with feeding");
-        let mut idx = feed.idx + 1;
+        let mut next = self.queue.auto_next(feed.idx);
+        let mut attempts = self.queue.len();
         loop {
-            if idx >= self.queue.len() {
+            let Some(idx) = next.filter(|_| attempts > 0) else {
                 let mut tail = vec![];
                 feed.chain.flush(&mut tail);
                 self.push_bytes(tail);
                 self.end_pending = true;
                 if let Some(a) = &self.active { a.shared.draining.store(true, Release); }
                 return;
-            }
-            let mut dec = match self.open_decoder(idx) { Ok(d) => d, Err(e) => { self.track_error(idx, &e); idx += 1; continue; } };
+            };
+            attempts -= 1;
+            let mut dec = match self.open_decoder(idx) { Ok(d) => d, Err(e) => { self.track_error(idx, &e); next = self.queue.user_next(idx); continue; } };
             let current = self.active.as_ref().map(|a| (a.info.format, a.exclusive()));
             let plan = self.plan_for(dec.as_mut(), current);
             let same = current.is_some_and(|(f, ex)| f == plan.format && ex == plan.exclusive);
@@ -555,8 +752,14 @@ impl Player {
     // ---------- seek ----------
 
     fn seek(&mut self, ms: u64) {
-        if self.status == PlaybackStatus::Stopped || self.active.is_none() { return; }
+        if self.status == PlaybackStatus::Stopped { return; }
+        if self.active.is_none() {
+            // Paused without a stream (restored session, device loss): move the resume point.
+            if self.status == PlaybackStatus::Paused { self.resume_ms = Some(ms); self.publish(true); }
+            return;
+        }
         let idx = self.markers.front().map_or(self.cur, |m| m.idx);
+        let listen = self.take_listen();
         {
             // Everything already in the ring is stale: drop it before any new bytes are written.
             let a = self.active.as_mut().unwrap();
@@ -571,15 +774,20 @@ impl Player {
         self.shown_idx = None;
         let mut dec = match self.feeding.take() {
             Some(f) if f.idx == idx => f.dec,
-            _ => match self.open_decoder(idx) { Ok(d) => d, Err(e) => { self.track_error(idx, &e); return self.start_at(idx + 1, 0); } },
+            _ => match self.open_decoder(idx) { Ok(d) => d, Err(e) => { self.track_error(idx, &e); return self.start_after(idx, false); } },
         };
         let frame = ms * dec.info().spec.sample_rate as u64 / 1000;
-        if dec.info().total_frames.is_some_and(|t| frame >= t) { return self.start_at(idx + 1, 0); }
-        if let Err(e) = dec.seek(frame) { self.track_error(idx, &e); return self.start_at(idx + 1, 0); }
+        if dec.info().total_frames.is_some_and(|t| frame >= t) { return self.start_after(idx, true); }
+        if let Err(e) = dec.seek(frame) { self.track_error(idx, &e); return self.start_after(idx, false); }
         let current = self.active.as_ref().map(|a| (a.info.format, a.exclusive()));
         let plan = self.plan_for(dec.as_mut(), current);
-        if current.is_some_and(|(f, ex)| f != plan.format || ex != plan.exclusive) { return self.start_at(idx, ms); }
+        if current.is_some_and(|(f, ex)| f != plan.format || ex != plan.exclusive) {
+            self.start_at(idx, ms);
+            self.put_listen(listen);
+            return;
+        }
         self.begin_feeding(idx, dec, plan, ms, None);
+        self.put_listen(listen);
         self.cur = idx;
         self.publish(true);
     }
@@ -589,7 +797,8 @@ impl Player {
     fn position_ms(&self) -> u64 {
         if self.status == PlaybackStatus::Stopped { return 0; }
         let (Some(a), Some(m)) = (&self.active, self.markers.front()) else { return self.resume_ms.unwrap_or(0) };
-        let consumed = a.shared.consumed_frames.load(Acquire);
+        // A front marker the output already passed (not yet popped) is reported at its end.
+        let consumed = a.shared.consumed_frames.load(Acquire).min(self.markers.get(1).map_or(u64::MAX, |n| n.start));
         m.start_ms + consumed.saturating_sub(m.start) * 1000 / m.out_rate.max(1) as u64
     }
 
@@ -597,16 +806,22 @@ impl Player {
         let Some(a) = &self.active else { return };
         let consumed = a.shared.consumed_frames.load(Acquire);
         let underruns = a.shared.underruns.load(Relaxed);
-        while self.markers.len() > 1 && self.markers[1].start <= consumed { self.markers.pop_front(); }
+        let discard_to = a.shared.discard_to.load(Acquire);
         let mut changed = false;
-        if let Some(m) = self.markers.front_mut() {
-            if self.shown_idx != Some(m.idx) && m.start <= consumed.max(a.shared.discard_to.load(Acquire)) {
+        // Walks every marker the output has reached, so a track that began and ended between two
+        // observations (a short track, a large device period, a long pump pass) is still shown and
+        // can still count as played, in order, before the marker after it.
+        loop {
+            let next_start = self.markers.get(1).map(|n| n.start);
+            let passed = next_start.is_some_and(|s| s <= consumed);
+            let Some(m) = self.markers.front_mut() else { break };
+            if self.shown_idx != Some(m.idx) && m.start <= consumed.max(discard_to) {
                 self.shown_idx = Some(m.idx);
                 self.cur = m.idx;
                 m.signal.underruns = underruns;
                 let _ = self.events.send(PlayerEvent::SignalPath(m.signal.clone()));
                 changed = true;
-            } else if underruns != self.last_underruns.0 && self.last_underruns.1.elapsed() >= Duration::from_secs(1) {
+            } else if !passed && underruns != self.last_underruns.0 && self.last_underruns.1.elapsed() >= Duration::from_secs(1) {
                 let fresh = underruns.saturating_sub(self.last_underruns.0).min(16);
                 let now = Instant::now();
                 self.underrun_times.extend(std::iter::repeat_n(now, fresh as usize));
@@ -621,6 +836,19 @@ impl Player {
                 self.last_underruns = (underruns, now);
                 let _ = self.events.send(PlayerEvent::SignalPath(m.signal.clone()));
             }
+            if self.status == PlaybackStatus::Playing && !m.reported && m.start <= consumed {
+                let heard_to = next_start.map_or(consumed, |s| consumed.min(s));
+                let listened = m.listened_carry_ms + (heard_to - m.start) * 1000 / m.out_rate.max(1) as u64;
+                if listened >= played_threshold_ms(m.duration_ms) {
+                    m.reported = true;
+                    if let Some(e) = self.queue.get(m.idx) {
+                        let _ = self.events.send(PlayerEvent::Played { track_id: e.track_id, path: e.path.clone() });
+                    }
+                }
+            }
+            if !passed { break; }
+            if changed { self.publish(true); changed = false; }
+            self.markers.pop_front();
         }
         if changed || (self.status == PlaybackStatus::Playing && self.last_tick.elapsed() >= Duration::from_millis(250)) {
             self.publish(true);
@@ -630,27 +858,30 @@ impl Player {
     fn publish(&mut self, emit: bool) {
         self.last_tick = Instant::now();
         let entry = self.queue.get(self.cur);
-        let duration_ms = self.markers.front().filter(|m| m.idx == self.cur).and_then(|m| m.duration_ms);
+        let duration_ms = self.markers.front().filter(|m| m.idx == self.cur).and_then(|m| m.duration_ms).or_else(|| entry.and_then(|e| e.duration_ms));
         let state = PlayerState {
             status: self.status,
             queue_index: entry.map(|_| self.cur as u32),
             queue_item_id: entry.map(|e| e.id),
-            track: entry.map(|e| TrackSummary { path: e.path.to_string_lossy().into_owned(), title: e.title.clone(), duration_ms, track_id: None, artist: None, album: None, artwork_id: None }),
+            track: entry.map(|e| TrackSummary {
+                path: e.path.to_string_lossy().into_owned(), title: e.title.clone(), duration_ms,
+                track_id: e.track_id, artist: e.artist.clone(), album: e.album.clone(), artwork_id: e.artwork_id,
+            }),
             position_ms: self.position_ms(),
             duration_ms,
             volume: self.volume,
             mode: self.mode,
             device_id: self.device.clone(),
-            shuffle: false,
-            repeat: RepeatMode::Off,
+            shuffle: self.queue.shuffle(),
+            repeat: self.queue.repeat(),
         };
         *self.shared_state.lock().unwrap() = state.clone();
         if emit { let _ = self.events.send(PlayerEvent::State(state)); }
     }
 
     fn emit_queue(&self) {
-        let items = self.queue.iter().map(|e| QueueItem { id: e.id, path: e.path.to_string_lossy().into_owned(), title: e.title.clone(), track_id: None, artist: None, album: None, artwork_id: None, duration_ms: None }).collect();
-        let _ = self.events.send(PlayerEvent::Queue(QueueChanged { items, current: (!self.queue.is_empty()).then_some(self.cur as u32) }));
+        let current = (!self.queue.is_empty()).then_some(self.cur as u32);
+        let _ = self.events.send(PlayerEvent::Queue(QueueChanged { items: self.queue.items(), current }));
     }
 
     fn track_error(&self, idx: usize, e: &DecodeError) {

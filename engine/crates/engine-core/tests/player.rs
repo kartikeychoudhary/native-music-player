@@ -18,7 +18,7 @@ fn setup(mode: OutputMode) -> (PlayerHandle, NullHandle, Receiver<PlayerEvent>) 
 }
 
 fn queue(p: &PlayerHandle, names: &[&str]) {
-    p.send(Command::SetQueue { paths: names.iter().map(|n| fixture(n)).collect(), start: 0 });
+    p.send(Command::SetQueue { items: names.iter().map(|n| engine_core::player::NewEntry::from_path(fixture(n))).collect(), start: 0 });
     p.send(Command::Play(None));
 }
 

@@ -130,7 +130,7 @@ fn play(files: Vec<PathBuf>, bit_perfect: bool, device: Option<String>, null: bo
     let player = spawn_player(backend(null, speed), PlayerConfig::default(), tx);
     if bit_perfect { player.send(Command::SetMode(protocol::OutputMode::BitPerfect)); }
     if device.is_some() { player.send(Command::SetDevice(device)); }
-    player.send(Command::SetQueue { paths: files, start: 0 });
+    player.send(Command::SetQueue { items: files.into_iter().map(engine_core::player::NewEntry::from_path).collect(), start: 0 });
     player.send(Command::Play(None));
     let mut progress = PlayProgress::default();
     let mut finished = false;

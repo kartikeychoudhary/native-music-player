@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use engine_core::output::OutputBackend;
@@ -46,7 +45,7 @@ pub fn dispatch(ctx: &Ctx, method: &str, p: Value) -> Result<Outcome, RpcError> 
             if (p.start_index as usize) >= p.paths.len().max(1) || (p.paths.is_empty() && p.start_index > 0) {
                 return Err(err(ErrorCode::InvalidArgument.code(), "startIndex out of range"));
             }
-            ok(Command::SetQueue { paths: p.paths.into_iter().map(PathBuf::from).collect(), start: p.start_index as usize })
+            ok(Command::SetQueue { items: p.paths.into_iter().map(engine_core::player::NewEntry::from_path).collect(), start: p.start_index as usize })
         }
         "queue.get" => Ok(Outcome::Reply(serde_json::to_value(&*ctx.queue.lock().unwrap_or_else(|p| p.into_inner())).unwrap())),
         "devices.list" => ctx.backend.devices().map(|d| Outcome::Reply(serde_json::to_value(d).unwrap())).map_err(|e| err(e.code().code(), e.to_string())),
