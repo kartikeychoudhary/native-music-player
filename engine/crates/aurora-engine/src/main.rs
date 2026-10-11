@@ -1,3 +1,4 @@
+mod osmedia;
 mod rpc;
 
 use std::path::PathBuf;

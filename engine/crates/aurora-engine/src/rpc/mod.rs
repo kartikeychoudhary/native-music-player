@@ -94,11 +94,22 @@ pub fn run(opts: RunOptions) -> i32 {
     if let Some(e) = library_error { notify_error(&out, e.code(), format!("Library unavailable: {e}")); }
     if let Some(svc) = &library { svc.begin(); }
 
+    let os_tx = crate::osmedia::enabled().then(|| {
+        let (tx, rx) = crossbeam_channel::unbounded::<protocol::PlayerState>();
+        let lib = library.clone();
+        let cover = move |art: i64| lib.as_ref().and_then(|s| s.lib.artwork_info(art, 300).ok()).map(|i| PathBuf::from(i.path));
+        crate::osmedia::spawn(rx, player.commander(), player.state_reader(), cover);
+        tx
+    });
+
     let (out2, queue2, lib2) = (out.clone(), queue.clone(), library.clone());
     std::thread::Builder::new().name("aurora-events".into()).spawn(move || {
         for ev in rx.iter() {
             match ev {
-                PlayerEvent::State(s) => out2.notify("player.state", s),
+                PlayerEvent::State(s) => {
+                    if let Some(tx) = &os_tx { let _ = tx.send(s.clone()); }
+                    out2.notify("player.state", s)
+                }
                 PlayerEvent::SignalPath(s) => out2.notify("player.signalPath", s),
                 PlayerEvent::Queue(q) => { *queue2.lock().unwrap_or_else(|p| p.into_inner()) = q.clone(); out2.notify("queue.changed", q) }
                 PlayerEvent::Error(e) => {

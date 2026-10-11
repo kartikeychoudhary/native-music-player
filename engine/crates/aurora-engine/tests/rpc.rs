@@ -69,7 +69,7 @@ fn devices_and_state() {
 #[test]
 fn exits_when_stdin_closes() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_aurora-engine"))
-        .env("AURORA_OUTPUT", "null")
+        .env("AURORA_OUTPUT", "null").env("AURORA_OSMEDIA", "0")
         .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null())
         .spawn().unwrap();
     drop(child.stdin.take());
