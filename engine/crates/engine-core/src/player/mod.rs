@@ -198,8 +198,9 @@ impl Player {
             Command::SetVolume(v) => {
                 self.volume = v.clamp(0.0, 1.0);
                 if let Some(a) = &self.active { a.shared.set_gain(volume_gain(self.volume) as f32); }
+                let software_gain = self.software_gain();
                 if let Some(m) = self.markers.front_mut() {
-                    if let Some(vol) = m.signal.stages.iter_mut().find(|s| s.kind == StageKind::Volume && s.detail.ends_with('%')) {
+                    if let Some(vol) = m.signal.stages.iter_mut().find(|s| software_gain && s.kind == StageKind::Volume && s.detail.ends_with('%')) {
                         vol.detail = format!("{}%", (self.volume * 100.0).round() as u32);
                         vol.active = self.volume < 1.0;
                     }
@@ -260,6 +261,13 @@ impl Player {
         decode::open(&self.queue[idx].path)
     }
 
+    /// Software volume applies only in processed mode. Bit-perfect mode hides the volume control, so
+    /// it means unity gain even when a track falls back to a processed stream.
+    fn software_gain(&self) -> bool { self.mode == OutputMode::Processed }
+
+    /// The volume the signal path reports for streams opened now.
+    fn effective_volume(&self) -> f32 { if self.software_gain() { self.volume } else { 1.0 } }
+
     fn device_transport(&self) -> Transport {
         let devices = &self.last_devices.0;
         let found = match &self.device { Some(id) => devices.iter().find(|d| &d.id == id), None => devices.iter().find(|d| d.is_default) };
@@ -299,7 +307,7 @@ impl Player {
     fn open_stream(&mut self, plan: &PipelinePlan) -> Result<(), OutputError> {
         let fmt = plan.format;
         let (prod, src, shared) = ring_pair((fmt.sample_rate as f64 * self.buffer_secs) as usize, fmt);
-        shared.apply_gain.store(plan.passthrough == Passthrough::None, Release);
+        shared.apply_gain.store(self.software_gain() && plan.passthrough == Passthrough::None, Release);
         shared.set_gain(volume_gain(self.volume) as f32);
         let mut stream = self.backend.open(self.device.as_deref(), fmt, plan.exclusive, src)?;
         stream.start()?;
@@ -356,7 +364,7 @@ impl Player {
     fn begin_feeding(&mut self, idx: usize, dec: Box<dyn TrackDecoder>, plan: PipelinePlan, start_ms: u64, reuse: Option<StreamResampler>) {
         let a = self.active.as_ref().expect("stream open before feeding");
         let info = dec.info().clone();
-        let signal = build_signal_path(&info, &plan, &a.info, self.volume, self.backend.bluetooth(&a.info), a.shared.underruns.load(Relaxed));
+        let signal = build_signal_path(&info, &plan, &a.info, self.effective_volume(), self.backend.bluetooth(&a.info), a.shared.underruns.load(Relaxed));
         self.markers.push_back(Marker {
             start: a.written_frames(), idx, start_ms, out_rate: plan.format.sample_rate, signal,
             duration_ms: info.total_frames.map(|f| f * 1000 / info.spec.sample_rate.max(1) as u64),

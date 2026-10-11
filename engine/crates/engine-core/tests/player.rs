@@ -285,3 +285,22 @@ fn caps_time_exclusive_denial_reports_its_reason() {
     let paths = signal_paths(&events);
     assert!(paths.iter().any(|s| !s.bit_perfect && s.notes.iter().any(|n| n.contains("device busy"))), "{paths:?}");
 }
+
+#[test]
+fn bit_perfect_fallback_ignores_software_volume() {
+    // Bit-perfect mode hides the volume slider, so a fallback to a processed stream must stay at unity gain.
+    let (p, h, rx) = setup(OutputMode::BitPerfect);
+    p.send(Command::SetVolume(0.5));
+    h.set_fail_exclusive(true);
+    queue(&p, &["flac16_44k.flac"]);
+    let events = run_to_end(&h, &rx);
+    assert!(!h.opened()[0].1, "fallback stream must be shared");
+    assert_eq!(f32s(&h.recorded()), read_f32le("pcm16_44k.f32le"));
+    let paths = signal_paths(&events);
+    assert!(!paths.is_empty());
+    for sp in paths {
+        let vol = sp.stages.iter().find(|s| s.kind == StageKind::Volume).unwrap();
+        assert!(!vol.active, "{vol:?}");
+        assert_eq!(vol.detail, "100%");
+    }
+}
