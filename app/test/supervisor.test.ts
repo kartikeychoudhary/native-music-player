@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EngineSupervisor, restartDecision } from '../src/main/engine/supervisor'
 
 describe('restartDecision', () => {
@@ -121,5 +121,56 @@ describe('EngineSupervisor', () => {
     await new Promise((r) => setImmediate(r))
     expect(sup.status).toEqual({ state: 'failed', message: "Couldn't start the audio engine: spawn aurora-engine ENOENT" })
     expect(states).toEqual(['starting', 'failed'])
+  })
+
+  describe('stop()', () => {
+    afterEach(() => vi.useRealTimers())
+
+    async function readySup() {
+      vi.useFakeTimers()
+      const s = spawner()
+      const sup = new EngineSupervisor(s.spawn, { protocolVersion: 1 })
+      sup.start()
+      s.ready(0)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(sup.status.state).toBe('ready')
+      return { s, sup }
+    }
+    const reply = (s: ReturnType<typeof spawner>) =>
+      s.children[0].stdout.write(JSON.stringify({ jsonrpc: '2.0', id: 1, result: null }) + '\n')
+
+    it('waits for the engine to exit after the shutdown reply instead of killing it', async () => {
+      const { s, sup } = await readySup()
+      let done = false
+      const stopping = sup.stop().then(() => { done = true })
+      reply(s)
+      await vi.advanceTimersByTimeAsync(200)
+      expect(done).toBe(false)
+      expect(s.kills).toEqual([])
+      s.children[0].emit('exit', 0)
+      await stopping
+      expect(s.kills).toEqual([])
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('kills an engine that never exits once the bound has passed', async () => {
+      const { s, sup } = await readySup()
+      const stopping = sup.stop()
+      reply(s)
+      await vi.advanceTimersByTimeAsync(2999)
+      expect(s.kills).toEqual([])
+      await vi.advanceTimersByTimeAsync(1)
+      await stopping
+      expect(s.kills).toEqual([0])
+    })
+
+    it('a repeat stop() after the engine exited returns at once and leaves no timers', async () => {
+      const { s, sup } = await readySup()
+      const stopping = sup.stop()
+      s.children[0].emit('exit', 0)
+      await stopping
+      await sup.stop()
+      expect(vi.getTimerCount()).toBe(0)
+    })
   })
 })

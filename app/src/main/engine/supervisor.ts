@@ -2,6 +2,9 @@ import { EventEmitter } from 'node:events'
 import type { EngineStatus } from '@shared/api'
 import { EngineClient, type ChildLike } from './EngineClient'
 
+/** How long stop() waits for the engine to exit after `engine.shutdown` before killing it. */
+const STOP_TIMEOUT_MS = 3000
+
 export type RestartDecision = { action: 'restart'; delayMs: number } | { action: 'giveUp' }
 
 export function restartDecision(crashTimes: number[], now: number): RestartDecision {
@@ -81,13 +84,23 @@ export class EngineSupervisor extends EventEmitter {
     this.start()
   }
 
+  /**
+   * Asks the engine to shut down and waits (bounded) for it to exit on its own: the engine replies to
+   * `engine.shutdown` first and writes its final session.json afterwards, so killing at the reply loses it.
+   */
   async stop() {
     this.generation++
     this.stopping = true
     const c = this.client
     if (!c) return
-    await Promise.race([c.call('engine.shutdown').catch(() => {}), new Promise((r) => setTimeout(r, 1000))])
-    c.dispose()
+    if (c.hasExited) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const exited = new Promise<void>((r) => { c.once('exit', () => r()) })
+    const bound = new Promise<void>((r) => { timer = setTimeout(r, STOP_TIMEOUT_MS) })
+    c.call('engine.shutdown').catch(() => {})
+    await Promise.race([exited, bound])
+    clearTimeout(timer)
+    if (!c.hasExited) c.dispose()
   }
 
   call<T = unknown>(method: string, params?: unknown): Promise<T> {

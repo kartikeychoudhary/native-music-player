@@ -85,6 +85,9 @@ export class EngineClient extends EventEmitter {
     else this.emit('log', `malformed stdout message: ${line}`)
   }
 
+  /** True once the child has exited (or the client was disposed). */
+  get hasExited(): boolean { return this.exited }
+
   ready(): Promise<EngineReady> { return this.readyPromise }
 
   call<T = unknown>(method: string, params: unknown = {}): Promise<T> {
