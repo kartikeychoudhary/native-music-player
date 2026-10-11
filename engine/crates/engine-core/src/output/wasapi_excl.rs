@@ -72,6 +72,12 @@ pub fn caps(id: Option<&str>) -> Result<DeviceCaps, OutputError> {
     Ok(caps)
 }
 
+/// Transport as reported by cpal (it reads the PnP enumerator, so Bluetooth is detected reliably);
+/// the friendly-name check only covers devices cpal cannot resolve.
+fn resolve_transport(from_cpal: Option<Transport>, friendly_name: &str) -> Transport {
+    from_cpal.unwrap_or_else(|| if friendly_name.to_ascii_lowercase().contains("bluetooth") { Transport::Bluetooth } else { Transport::Other })
+}
+
 pub struct WasapiStream { info: StreamInfo, alive: Arc<AtomicBool>, join: Option<JoinHandle<()>> }
 
 impl OutputStream for WasapiStream {
@@ -155,9 +161,10 @@ pub fn open(id: Option<&str>, fmt: OutputFormat, mut source: RingSource) -> Resu
 
     match init_rx.recv() {
         Ok(Ok((name, dev_id))) => {
-            let transport = if dev_id.contains("BTHENUM") || dev_id.contains("BTHLEDevice") || name.to_ascii_lowercase().contains("bluetooth") { Transport::Bluetooth } else { Transport::Other };
+            let device_id = id.map(str::to_owned).unwrap_or_else(|| format!("wasapi:{dev_id}"));
+            let transport = resolve_transport(cpal_out::transport(Some(&device_id)), &name);
             Ok(Box::new(WasapiStream {
-                info: StreamInfo { device_id: id.map(str::to_owned).unwrap_or_else(|| format!("wasapi:{dev_id}")), device_name: name, transport, share: ShareMode::Exclusive, format: fmt },
+                info: StreamInfo { device_id, device_name: name, transport, share: ShareMode::Exclusive, format: fmt },
                 alive,
                 join: Some(join),
             }))
@@ -170,5 +177,22 @@ pub fn open(id: Option<&str>, fmt: OutputFormat, mut source: RingSource) -> Resu
             let _ = join.join();
             Err(OutputError::Other("render thread exited during setup".into()))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cpal_transport_wins_over_the_name() {
+        assert_eq!(resolve_transport(Some(Transport::Bluetooth), "Headphones (WH-1000XM4)"), Transport::Bluetooth);
+        assert_eq!(resolve_transport(Some(Transport::Usb), "x"), Transport::Usb);
+    }
+
+    #[test]
+    fn name_heuristic_is_the_fallback() {
+        assert_eq!(resolve_transport(None, "Bluetooth Speaker"), Transport::Bluetooth);
+        assert_eq!(resolve_transport(None, "Speakers (Realtek)"), Transport::Other);
     }
 }

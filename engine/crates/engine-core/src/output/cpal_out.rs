@@ -31,6 +31,12 @@ pub(crate) fn device_name(id: Option<&str>) -> Option<String> {
     find_device(&host(), id).ok()?.description().ok().map(|d| d.name().to_string())
 }
 
+/// Transport of a device (default device for `None`); `None` if cpal cannot find it.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn transport(id: Option<&str>) -> Option<Transport> {
+    find_device(&host(), id).ok().map(|d| describe(&d).2)
+}
+
 pub(crate) fn transport_of(t: InterfaceType) -> Transport {
     match t {
         InterfaceType::Bluetooth => Transport::Bluetooth,
