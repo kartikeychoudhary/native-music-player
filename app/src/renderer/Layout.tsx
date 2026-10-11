@@ -7,6 +7,7 @@ import { PromptDialog } from './components/PromptDialog'
 import { Sidebar, SidebarPlaylists } from './components/Sidebar'
 import { Toasts } from './components/Toasts'
 import { TrackInfoDialog } from './components/TrackInfoDialog'
+import { useGo } from './lib/useGo'
 import { handleShortcut } from './lib/shortcuts'
 import { S } from './lib/strings'
 import { usePlayer } from './stores/player'
@@ -18,6 +19,7 @@ export function Layout() {
   const expanded = useUi((u) => u.sidebarExpanded)
   const pathname = useRouterState({ select: (r) => r.location.pathname })
   const error = usePlayer((p) => p.error)
+  const go = useGo()
 
   useEffect(() => { void api?.setSettings({ lastView: pathname }).catch(() => {}) }, [api, pathname])
   useEffect(() => {
@@ -26,10 +28,10 @@ export function Layout() {
     usePlayer.getState().dismissError()
   }, [error])
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { handleShortcut(e, usePlayer.getState(), performance.now()) }
+    const onKey = (e: KeyboardEvent) => { handleShortcut(e, usePlayer.getState(), performance.now(), go) }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [go])
 
   return (
     <div className={s.app} data-platform={api?.platform} data-expanded={expanded}>

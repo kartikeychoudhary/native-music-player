@@ -24,9 +24,11 @@ export function SeekBar() {
       <span className={s.time}>{formatTime(pos)}</span>
       <input
         className={s.range} type="range" min={0} max={duration || 1} step={100} value={Math.min(pos, duration || 1)}
-        aria-label="Seek" disabled={!duration} style={{ ['--pct' as string]: `${pct}%` }}
+        aria-label="Seek" aria-valuetext={`${formatTime(pos)} of ${formatTime(duration)}`} disabled={!duration} style={{ ['--pct' as string]: `${pct}%` }}
         onChange={(e) => setDrag(Number(e.target.value))}
         onPointerUp={() => { if (drag != null) { void seek(drag); setDrag(null) } }}
+        onPointerCancel={() => setDrag(null)}
+        onBlur={() => setDrag(null)}
         onKeyUp={() => { if (drag != null) { void seek(drag); setDrag(null) } }}
       />
       <span className={s.time}>{formatTime(duration)}</span>

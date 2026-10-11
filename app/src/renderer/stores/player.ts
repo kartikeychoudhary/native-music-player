@@ -29,6 +29,8 @@ export interface PlayerStore {
   setVolume(v: number): Promise<void>
   setMode(m: OutputMode): Promise<void>
   setDevice(id: string | null): Promise<void>
+  setShuffle(on: boolean): Promise<void>
+  cycleRepeat(): Promise<void>
   playTracks(ids: number[], start?: number, opts?: { shuffle?: boolean }): Promise<void>
   playNext(ids: number[]): Promise<void>
   addToQueue(ids: number[]): Promise<void>
@@ -141,6 +143,11 @@ export const usePlayer = create<PlayerStore>()((set, get) => {
     },
     async setMode(mode) { await safe(call('player.setMode', { mode })) },
     async setDevice(id) { await safe(call('player.setDevice', { id })) },
+    async setShuffle(shuffle) { await safe(call('queue.setShuffle', { shuffle })) },
+    async cycleRepeat() {
+      const next = { off: 'all', all: 'one', one: 'off' } as const
+      await safe(call('queue.setRepeat', { repeat: next[get().state.repeat] }))
+    },
     async playTracks(ids, start = 0, opts) {
       if (!ids.length) return
       if (opts?.shuffle !== undefined && !(await safe(call('queue.setShuffle', { shuffle: opts.shuffle })))) return

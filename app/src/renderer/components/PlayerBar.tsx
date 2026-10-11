@@ -1,10 +1,14 @@
-import { useNavigate } from '@tanstack/react-router'
-import { Disc3, ListMusic, Volume2, VolumeX } from 'lucide-react'
+import { useNavigate, useRouter, useRouterState } from '@tanstack/react-router'
+import { Heart, ListMusic, Volume2, VolumeX } from 'lucide-react'
+import { S } from '../lib/strings'
 import { usePlayer } from '../stores/player'
+import { useUi } from '../stores/ui'
+import { Artwork } from './Artwork'
 import { DevicePicker } from './DevicePicker'
 import { FormatBadges } from './FormatBadges'
 import { SeekBar } from './SeekBar'
 import { Transport } from './Transport'
+import { playlistSubmenu } from './trackMenu'
 import s from './PlayerBar.module.css'
 
 export function PlayerBar() {
@@ -12,15 +16,27 @@ export function PlayerBar() {
   const signal = usePlayer((p) => p.signal)
   const bitPerfect = state.mode === 'bitPerfect'
   const navigate = useNavigate()
+  const router = useRouter()
+  const onQueue = useRouterState({ select: (r) => r.location.pathname === '/queue' })
   const { setVolume, setMode } = usePlayer.getState()
+  const t = state.track
+  const sub = t ? (t.artist ?? t.album ?? t.path.split(/[\\/]/).slice(-2, -1)[0]) : 'Open files to start'
+  // The heart lists the playlists directly instead of opening a one-item "Add to playlist" submenu first.
+  const like = (e: React.MouseEvent) => {
+    const id = t?.trackId
+    if (id == null) return
+    const r = e.currentTarget.getBoundingClientRect()
+    useUi.getState().openMenu(r.left, r.top - 8, playlistSubmenu(async () => [id]).items ?? [])
+  }
   return (
     <footer className={s.bar}>
       <div className={s.now}>
-        <div className={s.art} aria-hidden><Disc3 size={22} /></div>
+        <Artwork id={t?.artworkId ?? null} size={64} px={46} alt={t?.title ?? ''} />
         <div className={s.meta}>
-          <div className={s.title} data-testid="now-title">{state.track?.title ?? 'Nothing playing'}</div>
-          <div className="muted">{state.track ? state.track.path.split(/[\\/]/).slice(-2, -1)[0] : 'Open files to start'}</div>
+          <div className={s.title} data-testid="now-title">{t?.title ?? 'Nothing playing'}</div>
+          <div className={`${s.sub} muted`}>{sub}</div>
         </div>
+        <button className={s.icon} aria-label={S.addCurrentToPlaylist} disabled={t?.trackId == null} onClick={like}><Heart size={16} /></button>
       </div>
       <div className={s.center}>
         <Transport />
@@ -28,7 +44,7 @@ export function PlayerBar() {
       </div>
       <div className={s.right}>
         <FormatBadges signal={signal} />
-        <button className={s.icon} aria-label="Queue" onClick={() => void navigate({ to: '/queue' })}><ListMusic size={16} /></button>
+        <button className={s.icon} aria-label="Queue" aria-pressed={onQueue} onClick={() => (onQueue ? router.history.back() : void navigate({ to: '/queue' }))}><ListMusic size={16} /></button>
         <DevicePicker />
         <button
           role="switch" aria-checked={bitPerfect} aria-label="Bit-perfect" className={s.switch}

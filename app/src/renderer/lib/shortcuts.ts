@@ -1,12 +1,30 @@
 import { livePosition, type PlayerStore } from '../stores/player'
 
 // Controls that own their own keyboard behaviour; global shortcuts must not steal keys from them.
-const INTERACTIVE = 'button, [role=switch], [role=slider], a, input, select, textarea, [contenteditable="true"]'
+const INTERACTIVE = 'button, [role=switch], [role=slider], [role=grid], [role=listbox], [role=menu], [role=dialog], a, input, select, textarea, [contenteditable="true"]'
 const SEEK_STEP_MS = 5000
+const VOLUME_STEP = 0.05
 
-/** Applies a global playback shortcut. Returns true when the event was handled. */
-export function handleShortcut(e: KeyboardEvent, store: PlayerStore, now: number): boolean {
-  if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return false
+/** Listed in Settings (spec §5.6). M3 adds Ctrl/Cmd+L (lyrics) and Ctrl/Cmd+M (mini-player). */
+export const SHORTCUTS: { keys: string; action: string }[] = [
+  { keys: 'Space', action: 'Play / pause' },
+  { keys: '← / →', action: 'Seek back / forward 5 s' },
+  { keys: 'Shift + ← / →', action: 'Previous / next track' },
+  { keys: '↑ / ↓', action: 'Volume up / down' },
+  { keys: 'Ctrl/Cmd + F', action: 'Search' },
+  { keys: 'Ctrl/Cmd + ,', action: 'Settings' },
+]
+
+/** Applies a global shortcut. Returns true when the event was handled. `go` navigates (Layout passes it). */
+export function handleShortcut(e: KeyboardEvent, store: PlayerStore, now: number, go?: (path: string) => void): boolean {
+  if (e.defaultPrevented || e.altKey) return false
+  if (e.ctrlKey || e.metaKey) {
+    const target = e.key === 'f' || e.key === 'F' ? '/search' : e.key === ',' ? '/settings' : null
+    if (!target || !go) return false
+    e.preventDefault()
+    go(target)
+    return true
+  }
   if ((e.target as Element | null)?.closest?.(INTERACTIVE)) return false
   if (e.code === 'Space') {
     e.preventDefault()
@@ -19,6 +37,13 @@ export function handleShortcut(e: KeyboardEvent, store: PlayerStore, now: number
     const dir = e.key === 'ArrowRight' ? 1 : -1
     const max = store.state.durationMs ?? Infinity
     void store.seek(Math.min(max, Math.max(0, livePosition(store, now) + dir * SEEK_STEP_MS)))
+    return true
+  }
+  if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+    if (store.state.mode === 'bitPerfect') return false
+    e.preventDefault()
+    const v = store.state.volume + (e.key === 'ArrowUp' ? VOLUME_STEP : -VOLUME_STEP)
+    void store.setVolume(Math.round(Math.min(1, Math.max(0, v)) * 100) / 100)
     return true
   }
   return false

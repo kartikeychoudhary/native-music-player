@@ -1,4 +1,4 @@
-import { Activity, Disc3, House, ListMusic, ListOrdered, Search, Tags, Users, type LucideIcon } from 'lucide-react'
+import { Activity, Disc3, House, ListMusic, ListOrdered, Search, Settings, Tags, Users, type LucideIcon } from 'lucide-react'
 import { S } from './strings'
 
 export interface NavItem { to: string; label: string; icon: LucideIcon }
@@ -13,6 +13,7 @@ export const NAV: NavItem[] = [
   { to: '/playlists', label: S.nav.playlists, icon: ListMusic },
   { to: '/queue', label: S.nav.queue, icon: ListOrdered },
   { to: '/signal', label: S.nav.signal, icon: Activity },
+  { to: '/settings', label: S.nav.settings, icon: Settings },
 ]
 
 export function isActive(pathname: string, to: string): boolean {

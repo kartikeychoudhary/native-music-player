@@ -75,3 +75,32 @@ describe('keyboard shortcuts', () => {
     expect(next).not.toHaveBeenCalled()
   })
 })
+
+describe('M2 shortcuts', () => {
+  const setVolume = vi.fn(async () => {})
+  beforeEach(() => { vi.clearAllMocks(); usePlayer.setState(usePlayer.getInitialState()); usePlayer.setState({ setVolume, state: { ...usePlayer.getState().state, volume: 0.5 } }) })
+  afterEach(() => { document.body.innerHTML = '' })
+
+  it('Ctrl/Cmd+F goes to search and Ctrl/Cmd+, to settings', () => {
+    const go = vi.fn()
+    const e = new KeyboardEvent('keydown', { key: 'f', ctrlKey: true, cancelable: true })
+    expect(handleShortcut(e, usePlayer.getState(), 0, go)).toBe(true)
+    expect(go).toHaveBeenCalledWith('/search')
+    expect(e.defaultPrevented).toBe(true)
+    handleShortcut(new KeyboardEvent('keydown', { key: ',', metaKey: true }), usePlayer.getState(), 0, go)
+    expect(go).toHaveBeenLastCalledWith('/settings')
+  })
+
+  it('arrow up/down change volume, but not in bit-perfect mode or inside a grid', () => {
+    handleShortcut(new KeyboardEvent('keydown', { key: 'ArrowUp' }), usePlayer.getState(), 0)
+    expect(setVolume).toHaveBeenLastCalledWith(0.55)
+    handleShortcut(new KeyboardEvent('keydown', { key: 'ArrowDown' }), usePlayer.getState(), 0)
+    expect(setVolume).toHaveBeenLastCalledWith(0.45)
+    const grid = document.createElement('div'); grid.setAttribute('role', 'grid'); document.body.append(grid)
+    press(grid, { key: 'ArrowDown' })
+    expect(setVolume).toHaveBeenCalledTimes(2)
+    usePlayer.setState({ state: { ...usePlayer.getState().state, mode: 'bitPerfect' } })
+    handleShortcut(new KeyboardEvent('keydown', { key: 'ArrowUp' }), usePlayer.getState(), 0)
+    expect(setVolume).toHaveBeenCalledTimes(2)
+  })
+})

@@ -19,20 +19,22 @@ test('open → play → signal path → bit-perfect', async () => {
     },
   })
   const win = await app.firstWindow()
+  // The last view is restored from the user's settings (outside AURORA_DATA_DIR), so start from Home explicitly.
+  await win.getByRole('link', { name: 'Home', exact: true }).click()
   await win.getByRole('button', { name: /open files/i }).click()
   await expect(win.getByTestId('now-title')).toHaveText('flac24_96k')
   await expect(win.getByTestId('format-badge')).toHaveText('FLAC 24/96')
-  await expect(win.getByRole('button', { name: 'Pause' })).toBeVisible()
+  await expect(win.getByRole('button', { name: 'Pause', exact: true })).toBeVisible()
 
   await win.getByRole('link', { name: 'Signal path' }).click()
   await expect(win.getByTestId('signal-output')).toContainText('Null Output')
 
-  await win.getByRole('button', { name: 'Pause' }).click()
-  await expect(win.getByRole('button', { name: 'Play' })).toBeVisible()
+  await win.getByRole('button', { name: 'Pause', exact: true }).click()
+  await expect(win.getByRole('button', { name: 'Play', exact: true })).toBeVisible()
 
   await win.getByRole('switch', { name: 'Bit-perfect' }).click()
   await expect(win.getByRole('slider', { name: 'Volume' })).toBeDisabled()
-  await win.getByRole('button', { name: 'Play' }).click()
+  await win.getByRole('button', { name: 'Play', exact: true }).click()
   await expect(win.getByTestId('bitperfect-badge')).toHaveText('Bit-perfect')
   await app.close()
 })
