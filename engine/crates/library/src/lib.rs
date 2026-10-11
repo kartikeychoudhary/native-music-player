@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use protocol::Folder;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
 pub use error::{LibError, Result};
 
@@ -140,7 +140,7 @@ impl Library {
     pub fn remove_folder(&self, id: i64) -> Result<()> {
         let hashes = {
             let mut conn = self.conn();
-            let tx = conn.transaction()?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             if tx.execute("DELETE FROM folders WHERE id = ?1", [id])? == 0 {
                 return Err(LibError::NotFound(format!("folder {id}")));
             }

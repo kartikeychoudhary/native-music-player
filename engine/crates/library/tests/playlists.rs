@@ -107,3 +107,30 @@ fn import_of_a_missing_file_is_file_missing() {
     let s = scanned(demo_tree);
     assert!(matches!(s.lib.import_m3u(&s.root().join("nope.m3u8")), Err(LibError::FileMissing(_))));
 }
+
+/// Playlist edits read, then write, on the shared connection. While the scanner (another
+/// connection) holds the write lock and commits, they must wait for it, not fail with "database is locked".
+#[test]
+fn playlist_edits_wait_for_another_writer() {
+    let s = scanned(demo_tree);
+    let p = s.lib.create_playlist("Mix").unwrap();
+    let (dawn, noon) = (s.id_of("Dawn"), s.id_of("Noon"));
+    s.lib.add_to_playlist(p.id, &[dawn], None).unwrap();
+    let edits: [(&str, &dyn Fn() -> library::Result<protocol::Playlist>); 3] = [
+        ("add_to_playlist", &|| s.lib.add_to_playlist(p.id, &[noon], None)),
+        ("reorder_playlist", &|| s.lib.reorder_playlist(p.id, 0, 1)),
+        ("remove_from_playlist", &|| { let first = s.lib.playlist(p.id)?.items[0].item_id; s.lib.remove_from_playlist(p.id, &[first]) }),
+    ];
+    for (name, edit) in edits {
+        let other = library::db::connect(&s.lib.db_path()).unwrap();
+        other.execute_batch("BEGIN IMMEDIATE; UPDATE folders SET last_scan_at = 1;").unwrap();
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            other.execute_batch("COMMIT").unwrap();
+        });
+        let r = edit();
+        writer.join().unwrap();
+        r.unwrap_or_else(|e| panic!("{name} failed while another connection was writing: {e}"));
+    }
+    assert_eq!(s.lib.playlist(p.id).unwrap().items.len(), 1);
+}

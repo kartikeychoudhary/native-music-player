@@ -2,7 +2,7 @@
 use std::path::{Component, Path, PathBuf};
 
 use protocol::{ImportResult, Playlist, PlaylistDetail, PlaylistItem};
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Transaction};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Transaction, TransactionBehavior};
 
 use crate::{unix_now, LibError, Library, Result};
 
@@ -136,7 +136,7 @@ impl Library {
 
     pub fn add_to_playlist(&self, id: i64, track_ids: &[i64], index: Option<u32>) -> Result<Playlist> {
         let mut conn = self.conn();
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         ensure(&tx, id)?;
         let mut items = item_ids(&tx, id)?;
         let mut added = Vec::with_capacity(track_ids.len());
@@ -157,7 +157,7 @@ impl Library {
 
     pub fn remove_from_playlist(&self, id: i64, item_ids_to_remove: &[i64]) -> Result<Playlist> {
         let mut conn = self.conn();
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         ensure(&tx, id)?;
         for chunk in item_ids_to_remove.chunks(500) {
             let marks = vec!["?"; chunk.len()].join(",");
@@ -173,7 +173,7 @@ impl Library {
 
     pub fn reorder_playlist(&self, id: i64, from: u32, to: u32) -> Result<Playlist> {
         let mut conn = self.conn();
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         ensure(&tx, id)?;
         let mut items = item_ids(&tx, id)?;
         let (from, to) = (from as usize, to as usize);

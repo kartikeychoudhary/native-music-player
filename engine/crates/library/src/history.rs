@@ -1,6 +1,6 @@
 //! Play history (spec §3.9 auto views) and per-track playability marks (spec §6).
 use protocol::{RecentKind, RecentResult};
-use rusqlite::params;
+use rusqlite::{params, TransactionBehavior};
 
 use crate::rows::{self, ALBUM_COLS, ALBUM_FROM, TRACK_COLS};
 use crate::{LibError, Library, Result};
@@ -8,7 +8,7 @@ use crate::{LibError, Library, Result};
 impl Library {
     pub fn record_play(&self, track_id: i64, at: i64) -> Result<()> {
         let mut conn = self.conn();
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let n = tx.execute("UPDATE tracks SET play_count = play_count + 1, last_played_at = ?2 WHERE id = ?1", params![track_id, at])?;
         if n == 0 { return Err(LibError::NotFound(format!("track {track_id}"))); }
         tx.execute("INSERT INTO play_history(track_id, played_at) VALUES (?1, ?2)", params![track_id, at])?;
