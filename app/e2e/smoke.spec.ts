@@ -1,5 +1,7 @@
 import { _electron as electron, expect, test } from '@playwright/test'
-import { resolve } from 'node:path'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { resolve, join } from 'node:path'
 
 const root = resolve(__dirname, '../..')
 const exe = process.platform === 'win32' ? 'aurora-engine.exe' : 'aurora-engine'
@@ -10,6 +12,7 @@ test('open → play → signal path → bit-perfect', async () => {
     env: {
       ...process.env,
       AURORA_ENGINE_PATH: resolve(root, 'engine/target/debug', exe),
+      AURORA_DATA_DIR: mkdtempSync(join(tmpdir(), 'aurora-e2e-')),
       AURORA_OUTPUT: 'null',
       AURORA_NULL_SPEED: '0.5',
       AURORA_TEST_OPEN_FILES: resolve(root, 'fixtures/out/flac24_96k.flac'),

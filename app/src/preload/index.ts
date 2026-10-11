@@ -9,6 +9,12 @@ const api: AuroraApi = {
     return () => { ipcRenderer.removeListener('aurora:event', handler) }
   },
   openFiles: () => ipcRenderer.invoke('aurora:openFiles'),
+  openFolder: () => ipcRenderer.invoke('aurora:openFolder'),
+  pickM3u: () => ipcRenderer.invoke('aurora:pickM3u'),
+  pickM3uSave: (defaultName) => ipcRenderer.invoke('aurora:pickM3uSave', defaultName),
+  showItemInFolder: (path) => ipcRenderer.invoke('aurora:showItemInFolder', path),
+  getSettings: () => ipcRenderer.invoke('aurora:getSettings'),
+  setSettings: (patch) => ipcRenderer.invoke('aurora:setSettings', patch),
   pathsForFiles: (files) => files.map((f) => webUtils.getPathForFile(f)).filter(Boolean),
   status: () => ipcRenderer.invoke('aurora:status'),
   restartEngine: () => ipcRenderer.invoke('aurora:restartEngine'),

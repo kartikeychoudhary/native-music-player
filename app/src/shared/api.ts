@@ -1,33 +1,104 @@
+import type { AlbumDetail } from '@protocol/AlbumDetail'
+import type { AlbumRow } from '@protocol/AlbumRow'
+import type { ArtistDetail } from '@protocol/ArtistDetail'
+import type { ArtistRow } from '@protocol/ArtistRow'
+import type { ArtworkInfo } from '@protocol/ArtworkInfo'
+import type { ArtworkParams } from '@protocol/ArtworkParams'
 import type { DeviceInfo } from '@protocol/DeviceInfo'
 import type { DeviceParams } from '@protocol/DeviceParams'
 import type { EngineErrorEvent } from '@protocol/EngineErrorEvent'
+import type { ExportParams } from '@protocol/ExportParams'
+import type { Folder } from '@protocol/Folder'
+import type { GenreRow } from '@protocol/GenreRow'
+import type { IdParams } from '@protocol/IdParams'
+import type { ImportResult } from '@protocol/ImportResult'
+import type { LibraryChanged } from '@protocol/LibraryChanged'
+import type { ListQuery } from '@protocol/ListQuery'
 import type { ModeParams } from '@protocol/ModeParams'
+import type { NameParams } from '@protocol/NameParams'
+import type { Page } from '@protocol/Page'
+import type { PathParams } from '@protocol/PathParams'
 import type { PlayParams } from '@protocol/PlayParams'
 import type { PlayerState } from '@protocol/PlayerState'
+import type { Playlist } from '@protocol/Playlist'
+import type { PlaylistAddParams } from '@protocol/PlaylistAddParams'
+import type { PlaylistDetail } from '@protocol/PlaylistDetail'
+import type { PlaylistRemoveParams } from '@protocol/PlaylistRemoveParams'
+import type { PlaylistReorderParams } from '@protocol/PlaylistReorderParams'
 import type { QueueChanged } from '@protocol/QueueChanged'
+import type { QueueMoveParams } from '@protocol/QueueMoveParams'
+import type { QueueRemoveParams } from '@protocol/QueueRemoveParams'
+import type { QueueSetParams } from '@protocol/QueueSetParams'
 import type { QueueSetPathsParams } from '@protocol/QueueSetPathsParams'
+import type { RecentParams } from '@protocol/RecentParams'
+import type { RecentResult } from '@protocol/RecentResult'
+import type { RenameParams } from '@protocol/RenameParams'
+import type { RepeatParams } from '@protocol/RepeatParams'
+import type { RescanParams } from '@protocol/RescanParams'
+import type { ScanProgress } from '@protocol/ScanProgress'
+import type { SearchParams } from '@protocol/SearchParams'
+import type { SearchResults } from '@protocol/SearchResults'
 import type { SeekParams } from '@protocol/SeekParams'
+import type { ShuffleParams } from '@protocol/ShuffleParams'
 import type { SignalPath } from '@protocol/SignalPath'
+import type { TrackDetail } from '@protocol/TrackDetail'
+import type { TrackIdsParams } from '@protocol/TrackIdsParams'
+import type { TrackRow } from '@protocol/TrackRow'
 import type { VolumeParams } from '@protocol/VolumeParams'
+import type { Settings } from './settings'
 
 export type EngineStatus = { state: 'starting' | 'ready' | 'restarting' | 'failed' | 'mismatch'; message?: string }
 type None = Record<string, never>
+type M<P, R> = { params: P; result: R }
 
 export type Methods = {
-  'player.play': { params: PlayParams; result: null }
-  'player.pause': { params: None; result: null }
-  'player.toggle': { params: None; result: null }
-  'player.stop': { params: None; result: null }
-  'player.next': { params: None; result: null }
-  'player.prev': { params: None; result: null }
-  'player.seek': { params: SeekParams; result: null }
-  'player.setVolume': { params: VolumeParams; result: null }
-  'player.setMode': { params: ModeParams; result: null }
-  'player.setDevice': { params: DeviceParams; result: null }
-  'player.state': { params: None; result: PlayerState }
-  'queue.setPaths': { params: QueueSetPathsParams; result: null }
-  'queue.get': { params: None; result: QueueChanged }
-  'devices.list': { params: None; result: DeviceInfo[] }
+  'player.play': M<PlayParams, null>
+  'player.pause': M<None, null>
+  'player.toggle': M<None, null>
+  'player.stop': M<None, null>
+  'player.next': M<None, null>
+  'player.prev': M<None, null>
+  'player.seek': M<SeekParams, null>
+  'player.setVolume': M<VolumeParams, null>
+  'player.setMode': M<ModeParams, null>
+  'player.setDevice': M<DeviceParams, null>
+  'player.state': M<None, PlayerState>
+  'queue.setPaths': M<QueueSetPathsParams, null>
+  'queue.set': M<QueueSetParams, null>
+  'queue.add': M<TrackIdsParams, null>
+  'queue.insertNext': M<TrackIdsParams, null>
+  'queue.move': M<QueueMoveParams, null>
+  'queue.remove': M<QueueRemoveParams, null>
+  'queue.clear': M<None, null>
+  'queue.setShuffle': M<ShuffleParams, null>
+  'queue.setRepeat': M<RepeatParams, null>
+  'queue.get': M<None, QueueChanged>
+  'devices.list': M<None, DeviceInfo[]>
+  'library.folders': M<None, Folder[]>
+  'library.addFolder': M<PathParams, Folder>
+  'library.removeFolder': M<IdParams, null>
+  'library.rescan': M<RescanParams, null>
+  'library.albums': M<ListQuery, Page<AlbumRow>>
+  'library.artists': M<ListQuery, Page<ArtistRow>>
+  'library.genres': M<ListQuery, Page<GenreRow>>
+  'library.tracks': M<ListQuery, Page<TrackRow>>
+  'library.album': M<IdParams, AlbumDetail>
+  'library.artist': M<IdParams, ArtistDetail>
+  'library.genre': M<IdParams, GenreRow>
+  'library.track': M<IdParams, TrackDetail>
+  'library.search': M<SearchParams, SearchResults>
+  'library.artwork': M<ArtworkParams, ArtworkInfo>
+  'library.recent': M<RecentParams, RecentResult>
+  'playlists.list': M<None, Playlist[]>
+  'playlists.get': M<IdParams, PlaylistDetail>
+  'playlists.create': M<NameParams, Playlist>
+  'playlists.rename': M<RenameParams, Playlist>
+  'playlists.delete': M<IdParams, null>
+  'playlists.addTracks': M<PlaylistAddParams, Playlist>
+  'playlists.removeItems': M<PlaylistRemoveParams, Playlist>
+  'playlists.reorder': M<PlaylistReorderParams, Playlist>
+  'playlists.importM3u': M<PathParams, ImportResult>
+  'playlists.exportM3u': M<ExportParams, null>
 }
 
 export type Events = {
@@ -37,23 +108,43 @@ export type Events = {
   'devices.changed': DeviceInfo[]
   'engine.error': EngineErrorEvent
   'engine.status': EngineStatus
+  'library.scanProgress': ScanProgress
+  'library.changed': LibraryChanged
 }
 
 export const ALLOWED_METHODS = [
   'player.play', 'player.pause', 'player.toggle', 'player.stop', 'player.next', 'player.prev', 'player.seek',
-  'player.setVolume', 'player.setMode', 'player.setDevice', 'player.state', 'queue.setPaths', 'queue.get', 'devices.list',
+  'player.setVolume', 'player.setMode', 'player.setDevice', 'player.state',
+  'queue.setPaths', 'queue.set', 'queue.add', 'queue.insertNext', 'queue.move', 'queue.remove', 'queue.clear',
+  'queue.setShuffle', 'queue.setRepeat', 'queue.get', 'devices.list',
+  'library.folders', 'library.addFolder', 'library.removeFolder', 'library.rescan', 'library.albums', 'library.artists',
+  'library.genres', 'library.tracks', 'library.album', 'library.artist', 'library.genre', 'library.track', 'library.search',
+  'library.artwork', 'library.recent',
+  'playlists.list', 'playlists.get', 'playlists.create', 'playlists.rename', 'playlists.delete', 'playlists.addTracks',
+  'playlists.removeItems', 'playlists.reorder', 'playlists.importM3u', 'playlists.exportM3u',
 ] as const satisfies readonly (keyof Methods)[]
+
+// Compile-time check that every typed method is allowed (and nothing else is).
+type Unlisted = Exclude<keyof Methods, (typeof ALLOWED_METHODS)[number]>
+const everyMethodAllowed: [Unlisted] extends [never] ? true : Unlisted = true
+void everyMethodAllowed
 
 export function isAllowedMethod(m: unknown): m is keyof Methods {
   return typeof m === 'string' && (ALLOWED_METHODS as readonly string[]).includes(m)
 }
 
-export const AUDIO_EXTENSIONS = ['mp3', 'm4a', 'm4b', 'mp4', 'aac', 'alac', 'flac', 'wav', 'aif', 'aiff', 'aifc', 'ogg', 'oga', 'opus', 'dsf', 'dff'] as const
+export const AUDIO_EXTENSIONS = ['mp3', 'm4a', 'm4b', 'mp4', 'aac', 'flac', 'wav', 'aif', 'aiff', 'aifc', 'ogg', 'oga', 'opus', 'dsf', 'dff'] as const
 
 export interface AuroraApi {
-  call<M extends keyof Methods>(method: M, params: Methods[M]['params']): Promise<Methods[M]['result']>
+  call<K extends keyof Methods>(method: K, params: Methods[K]['params']): Promise<Methods[K]['result']>
   on<E extends keyof Events>(event: E, cb: (payload: Events[E]) => void): () => void
   openFiles(): Promise<string[]>
+  openFolder(): Promise<string | null>
+  pickM3u(): Promise<string | null>
+  pickM3uSave(defaultName: string): Promise<string | null>
+  showItemInFolder(path: string): Promise<void>
+  getSettings(): Promise<Settings>
+  setSettings(patch: Partial<Settings>): Promise<Settings>
   pathsForFiles(files: File[]): string[]
   status(): Promise<EngineStatus>
   restartEngine(): Promise<void>

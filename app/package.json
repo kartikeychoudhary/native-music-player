@@ -1,5 +1,6 @@
 {
   "name": "aurora",
+  "productName": "Aurora",
   "version": "0.1.0",
   "private": true,
   "description": "Aurora: a native hi-res music player",
