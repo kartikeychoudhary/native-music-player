@@ -63,3 +63,19 @@ fn nearest_cached_size() {
     assert_eq!(artwork::nearest_size(65), 300);
     assert_eq!(artwork::nearest_size(5000), 1000);
 }
+
+#[test]
+fn artwork_info_resolves_the_nearest_cached_size_and_palette() {
+    use common::{tagged, Tags};
+    use lofty::picture::PictureType;
+    let blue = common::png(400, 400, [0, 0, 255]);
+    let s = common::scanned(|root| {
+        tagged("flac16_44k.flac", &root.join("a.flac"), &Tags { album: Some("A"), pictures: &[(PictureType::CoverFront, &blue)], ..Default::default() });
+    });
+    let id: i64 = s.lib.conn().query_row("SELECT id FROM artwork", [], |r| r.get(0)).unwrap();
+    let info = s.lib.artwork_info(id, 200).unwrap();
+    assert!(info.path.ends_with("-300.webp"), "{}", info.path);
+    assert!(std::path::Path::new(&info.path).exists());
+    assert_eq!(info.palette.unwrap().dominant, "#0000ff");
+    assert!(matches!(s.lib.artwork_info(9999, 64), Err(library::LibError::NotFound(_))));
+}

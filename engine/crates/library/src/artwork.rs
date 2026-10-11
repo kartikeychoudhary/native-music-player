@@ -68,3 +68,24 @@ pub fn store(dir: &Path, bytes: &[u8]) -> Result<(String, Palette), ArtError> {
     let thumb = img.thumbnail(64, 64).to_rgb8();
     Ok((h, crate::palette::extract(thumb.as_raw())))
 }
+
+impl crate::Library {
+    /// Cache file of the nearest stored size for artwork `id`, plus its palette.
+    pub fn artwork_info(&self, id: i64, size: u32) -> crate::Result<protocol::ArtworkInfo> {
+        use rusqlite::OptionalExtension;
+        let row = self
+            .conn()
+            .query_row("SELECT hash, dominant, vibrant, muted FROM artwork WHERE id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, Option<String>>(3)?)))
+            .optional()?;
+        let (hash, dominant, vibrant, muted) = row.ok_or_else(|| crate::LibError::NotFound(format!("artwork {id}")))?;
+        let path = path_for(&self.artwork_dir(), &hash, nearest_size(size));
+        if !path.exists() {
+            return Err(crate::LibError::FileMissing(path.display().to_string()));
+        }
+        let palette = match (dominant, vibrant, muted) {
+            (Some(dominant), Some(vibrant), Some(muted)) => Some(Palette { dominant, vibrant, muted }),
+            _ => None,
+        };
+        Ok(protocol::ArtworkInfo { path: path.to_string_lossy().into_owned(), palette })
+    }
+}

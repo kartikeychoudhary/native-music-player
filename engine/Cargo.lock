@@ -152,9 +152,11 @@ dependencies = [
  "clap",
  "crossbeam-channel",
  "engine-core",
+ "library",
  "protocol",
  "serde",
  "serde_json",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
 ]

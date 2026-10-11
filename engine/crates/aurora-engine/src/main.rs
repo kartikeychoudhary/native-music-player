@@ -19,7 +19,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Run the JSON-RPC server on stdio (default).
-    Rpc,
+    Rpc {
+        /// Folder for the library database, artwork cache and session. Without it nothing is persisted.
+        #[arg(long, value_name = "DIR")]
+        data_dir: Option<PathBuf>,
+    },
     /// Print what Aurora sees in a file.
     Probe { file: PathBuf },
     /// List output devices as JSON.
@@ -63,7 +67,8 @@ fn main() {
         Some(Cmd::Devices { null }) => devices(null),
         Some(Cmd::Play { files, bit_perfect, device, null, speed }) => play(files, bit_perfect, device, null, speed),
         Some(Cmd::Panic) => panic!("test panic"),
-        Some(Cmd::Rpc) | None => rpc::run(),
+        Some(Cmd::Rpc { data_dir }) => rpc::run(rpc::RunOptions { data_dir }),
+        None => rpc::run(rpc::RunOptions::default()),
     };
     std::process::exit(code);
 }
