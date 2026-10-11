@@ -43,10 +43,11 @@ fn transport(dev: u32) -> Transport {
 
 pub fn caps(id: Option<&str>) -> Result<DeviceCaps, OutputError> {
     let (dev, _) = resolve(id)?;
+    // `set_device_sample_rate` only accepts a discrete range (min == max == rate), so list only those.
     let ranges = get_available_sample_rates(dev).map_err(ca_err)?;
     let rates = COMMON_RATES
         .into_iter()
-        .filter(|&r| ranges.iter().any(|v| f64::from(r) >= v.mMinimum && f64::from(r) <= v.mMaximum))
+        .filter(|&r| ranges.iter().any(|v| v.mMinimum as u32 == r && v.mMaximum as u32 == r))
         .collect::<Vec<_>>();
     // I32 is not offered: an f32 stream cannot carry 32-bit integers exactly.
     let mut samples = vec![DeviceSample::F32];
@@ -62,6 +63,15 @@ pub fn caps(id: Option<&str>) -> Result<DeviceCaps, OutputError> {
     }
     if rates.is_empty() { return Err(OutputError::Other("no usable sample rates".into())); }
     Ok(DeviceCaps { rates, max_channels, samples, exclusive: true })
+}
+
+/// Pins the device's physical format to `wanted` at exactly `wanted.sample_rate`.
+/// `set_device_physical_stream_format` waits until the hardware reports the new format, so `Ok` means the pin held.
+fn pin_physical_format(dev: u32, wanted: StreamFormat) -> Result<(), String> {
+    let mut asbd = find_matching_physical_format(dev, wanted).ok_or_else(|| "no matching physical format".to_string())?;
+    // The matching entry may be a ranged format whose own rate differs; never let it move the device clock.
+    asbd.mSampleRate = wanted.sample_rate;
+    set_device_physical_stream_format(dev, asbd).map_err(|e| format!("{e:?}"))
 }
 
 pub struct HogStream {
@@ -81,6 +91,12 @@ impl Drop for HogStream {
     }
 }
 
+fn pinned_device(host: &cpal::Host, id: Option<&str>) -> Result<cpal::Device, OutputError> {
+    let dev = cpal_out::find_device(host, id)?;
+    let uid = dev.id().map_err(|e| OutputError::DeviceUnavailable(e.to_string()))?.to_string();
+    cpal_out::find_device(host, Some(&uid))
+}
+
 pub fn open(id: Option<&str>, fmt: OutputFormat, source: RingSource) -> Result<Box<dyn OutputStream>, OutputError> {
     let (dev, name) = resolve(id)?;
     let me = std::process::id() as i32;
@@ -89,7 +105,8 @@ pub fn open(id: Option<&str>, fmt: OutputFormat, source: RingSource) -> Result<B
         Ok(pid) if pid == me => {}
         Ok(pid) if pid != -1 => return Err(OutputError::ExclusiveDenied(format!("device hogged by process {pid}"))),
         _ => {
-            if toggle_hog_mode(dev).map_err(ca_err)? != me { return Err(OutputError::ExclusiveDenied("hog mode refused".into())); }
+            let owner = toggle_hog_mode(dev).map_err(|e| OutputError::ExclusiveDenied(format!("hog mode: {e:?}")))?;
+            if owner != me { return Err(OutputError::ExclusiveDenied("hog mode refused".into())); }
         }
     }
     let release = || { let _ = toggle_hog_mode(dev); };
@@ -103,8 +120,20 @@ pub fn open(id: Option<&str>, fmt: OutputFormat, source: RingSource) -> Result<B
         DeviceSample::F32 | DeviceSample::I32 => (CaSample::F32, LinearPcmFlags::IS_FLOAT | LinearPcmFlags::IS_PACKED),
     };
     let wanted = StreamFormat { sample_rate: f64::from(fmt.sample_rate), sample_format: ca_sample, flags, channels: u32::from(fmt.channels) };
-    if let Some(asbd) = find_matching_physical_format(dev, wanted) { let _ = set_device_physical_stream_format(dev, asbd); }
-    let cpal_dev = match cpal_out::find_device(&cpal_out::host(), id) {
+    // The ring carries integers, so the hardware must really run that integer format; if it can't,
+    // reporting s16/s24 would be false and the bytes would not be bit-perfect: fall back to shared instead.
+    let want_int = matches!(fmt.sample, DeviceSample::I16 | DeviceSample::I24);
+    if let Err(e) = pin_physical_format(dev, wanted) {
+        if want_int {
+            release();
+            return Err(OutputError::ExclusiveDenied(format!("couldn't set the device's {} physical format: {e}", fmt.sample.wire_name())));
+        }
+        tracing::warn!("couldn't pin the f32 physical format: {e}");
+    }
+    // A cpal default-device handle builds a DefaultOutput unit that follows the system default; look the device up
+    // by its UID so cpal builds a pinned Output unit on the device we hogged.
+    let host = cpal_out::host();
+    let cpal_dev = match pinned_device(&host, id) {
         Ok(d) => d,
         Err(e) => { release(); return Err(e); }
     };
@@ -113,6 +142,15 @@ pub fn open(id: Option<&str>, fmt: OutputFormat, source: RingSource) -> Result<B
         Ok(s) => s,
         Err(e) => { release(); return Err(e); }
     };
+    // cpal's stream setup re-applies its own (f32) physical format; set ours again before starting.
+    if let Err(e) = pin_physical_format(dev, wanted) {
+        if want_int {
+            drop(inner);
+            release();
+            return Err(OutputError::ExclusiveDenied(format!("device physical format changed after opening: {e}")));
+        }
+        tracing::warn!("couldn't re-pin the f32 physical format: {e}");
+    }
     let device_id = cpal_dev.id().map(|i| i.to_string()).unwrap_or_default();
     Ok(Box::new(HogStream {
         inner,

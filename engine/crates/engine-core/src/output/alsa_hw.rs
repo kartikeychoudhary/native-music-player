@@ -143,7 +143,9 @@ pub fn open(id: Option<&str>, fmt: OutputFormat, mut source: RingSource) -> Resu
                     if !alive2.load(Acquire) { break 'play; }
                 }
             }
-            let _ = pcm.drain();
+            // Play out buffered audio only at the natural end of the queue; on stop, seek, device switch or
+            // track change it is stale, so discard it instead of blocking the player for ~200 ms.
+            if source.shared().draining.load(Acquire) { let _ = pcm.drain(); } else { let _ = pcm.drop(); }
         })
         .map_err(|e| OutputError::Other(e.to_string()))?;
     match rx.recv() {
