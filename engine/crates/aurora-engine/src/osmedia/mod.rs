@@ -27,8 +27,8 @@ pub fn map_event(e: &MediaControlEvent) -> Option<Action> {
         MediaControlEvent::Previous => Action::Prev,
         MediaControlEvent::Stop => Action::Stop,
         MediaControlEvent::Seek(dir) => Action::SeekBy(signed(dir, SEEK_STEP_MS)),
-        MediaControlEvent::SeekBy(dir, d) => Action::SeekBy(signed(dir, d.as_millis() as i64)),
-        MediaControlEvent::SetPosition(MediaPosition(d)) => Action::SeekTo(d.as_millis() as u64),
+        MediaControlEvent::SeekBy(dir, d) => Action::SeekBy(signed(dir, i64::try_from(d.as_millis()).unwrap_or(i64::MAX))),
+        MediaControlEvent::SetPosition(MediaPosition(d)) => Action::SeekTo(u64::try_from(d.as_millis()).unwrap_or(u64::MAX)),
         _ => return None,
     })
 }
@@ -43,7 +43,8 @@ pub fn to_command(a: &Action, state: &PlayerState) -> Command {
         Action::Stop => Command::Stop,
         Action::SeekTo(ms) => Command::Seek(*ms),
         Action::SeekBy(d) => {
-            let target = (state.position_ms as i64 + d).max(0) as u64;
+            let pos = i64::try_from(state.position_ms).unwrap_or(i64::MAX);
+            let target = pos.saturating_add(*d).max(0) as u64;
             Command::Seek(state.duration_ms.map_or(target, |dur| target.min(dur)))
         }
     }
@@ -112,6 +113,7 @@ fn show(controls: &mut MediaControls, n: &NowPlaying) {
 
 /// Owns the OS media controls on a dedicated thread: OS events become player commands; the latest
 /// state from `states` updates what the OS shows. Exits quietly when `states` closes.
+/// Must stay panic-free: the engine's panic hook exits the whole process on a panic in any thread.
 pub fn spawn(states: Receiver<PlayerState>, commander: Commander, reader: StateReader, cover: impl Fn(i64) -> Option<PathBuf> + Send + 'static) -> Option<JoinHandle<()>> {
     std::thread::Builder::new().name("aurora-osmedia".into()).spawn(move || {
         #[cfg(windows)]
@@ -191,6 +193,22 @@ mod tests {
         assert!(matches!(to_command(&Action::SeekBy(10_000), &s), Command::Seek(8_000)));
         assert!(matches!(to_command(&Action::SeekBy(1_000), &playing(5_000, None)), Command::Seek(6_000)));
         assert!(matches!(to_command(&Action::Toggle, &s), Command::Toggle));
+    }
+
+    #[test]
+    fn extreme_seeks_do_not_panic_and_clamp() {
+        let huge = Duration::from_secs(u64::MAX / 2);
+        let fwd = map_event(&E::SeekBy(SeekDirection::Forward, huge)).unwrap();
+        let back = map_event(&E::SeekBy(SeekDirection::Backward, huge)).unwrap();
+        assert_eq!((fwd.clone(), back.clone()), (Action::SeekBy(i64::MAX), Action::SeekBy(-i64::MAX)));
+        let s = playing(5_000, Some(8_000));
+        assert!(matches!(to_command(&fwd, &s), Command::Seek(8_000)));
+        assert!(matches!(to_command(&back, &s), Command::Seek(0)));
+        let unknown = playing(5_000, None);
+        assert!(matches!(to_command(&fwd, &unknown), Command::Seek(t) if t == i64::MAX as u64));
+        assert!(matches!(to_command(&back, &unknown), Command::Seek(0)));
+        assert!(matches!(to_command(&fwd, &playing(u64::MAX, None)), Command::Seek(t) if t == i64::MAX as u64));
+        assert_eq!(map_event(&E::SetPosition(MediaPosition(Duration::MAX))), Some(Action::SeekTo(u64::MAX)));
     }
 
     #[test]
