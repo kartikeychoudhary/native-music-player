@@ -69,6 +69,11 @@ export const track = (id: number, title: string, extra: Record<string, unknown> 
   channels: 2, artworkId: null, missing: false, unplayable: null, playCount: 0, addedAt: 0, lastPlayedAt: null, ...extra,
 }) as never
 
+export const album = (id: number, title: string, extra: Record<string, unknown> = {}) => ({
+  id, title, artist: 'Alpha', artistId: 1, year: 2001, trackCount: 2, durationMs: 122_000, artworkId: 5, addedAt: 0,
+  codec: 'flac', maxSampleRate: 96000, maxBitDepth: 24, ...extra,
+}) as never
+
 /** Renders `ui` alone inside a router (components that navigate need router context). */
 export async function renderInRouter(ui: React.ReactNode) {
   const root = createRootRoute({ component: () => <>{ui}</> })
