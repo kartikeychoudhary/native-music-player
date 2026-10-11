@@ -21,7 +21,33 @@ pub fn fts_query(text: &str, columns: Option<&str>) -> Option<String> {
     })
 }
 
+/// How many FTS candidates to rank per wanted track on the first try, and on the single retry.
+const OVERFETCH: [i64; 2] = [4, 64];
+
 impl Library {
+    /// The best `limit` live tracks for `fts`. Ranking runs inside the FTS table alone; only the
+    /// top candidates are joined to `tracks` (to drop missing ones), so a broad prefix that matches
+    /// tens of thousands of rows doesn't pay a table lookup for each. If missing tracks eat the
+    /// over-fetch, it retries once with a bigger window, so the result is short only when nearly
+    /// every one of the top `limit * 64` matches is missing.
+    fn ranked_tracks(conn: &rusqlite::Connection, fts: &str, limit: i64) -> Result<Vec<protocol::TrackRow>> {
+        let mut rows = vec![];
+        for factor in OVERFETCH {
+            rows = conn
+                .prepare(&format!(
+                    "SELECT {TRACK_COLS} FROM (
+                       SELECT rowid AS id, bm25(tracks_fts, 10.0, 5.0, 3.0, 3.0, 1.0) AS rank
+                       FROM tracks_fts WHERE tracks_fts MATCH ?1 ORDER BY rank, rowid LIMIT ?3
+                     ) s JOIN tracks t ON t.id = s.id
+                     WHERE t.missing_since IS NULL ORDER BY s.rank, t.id LIMIT ?2"
+                ))?
+                .query_map(params![fts, limit, limit * factor], rows::track)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            if rows.len() as i64 >= limit { break; }
+        }
+        Ok(rows)
+    }
+
     pub fn search(&self, text: &str, limit: u32) -> Result<SearchResults> {
         let text = text.trim();
         let limit = limit.clamp(1, 100) as i64;
@@ -29,14 +55,7 @@ impl Library {
         let by_album = fts_query(text, Some("album album_artist")).expect("same tokens as `all`");
         let starts = format!("{}%", text.replace(['%', '_', '\\'], ""));
         let conn = self.conn();
-        let tracks = conn
-            .prepare(&format!(
-                "SELECT {TRACK_COLS} FROM tracks_fts f JOIN tracks t ON t.id = f.rowid
-                 WHERE tracks_fts MATCH ?1 AND t.missing_since IS NULL
-                 ORDER BY bm25(tracks_fts, 10.0, 5.0, 3.0, 3.0, 1.0), t.id LIMIT ?2"
-            ))?
-            .query_map(params![all, limit], rows::track)?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let tracks = Self::ranked_tracks(&conn, &all, limit)?;
         let albums = conn
             .prepare(&format!(
                 "SELECT {ALBUM_COLS} FROM {ALBUM_FROM}

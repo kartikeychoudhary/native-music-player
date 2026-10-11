@@ -26,6 +26,20 @@ fn title_matches_rank_above_artist_matches() {
 }
 
 #[test]
+fn missing_tracks_crowding_the_top_matches_do_not_hide_live_ones() {
+    let s = scanned(|root| {
+        for i in 0..6 {
+            tagged("flac16_44k.flac", &root.join(format!("n{i}.flac")), &Tags { title: Some("Nova"), artists: &["Someone"], album: Some("Y"), ..Default::default() });
+        }
+        tagged("flac16_44k.flac", &root.join("o.flac"), &Tags { title: Some("Other"), artists: &["Nova"], album: Some("X"), ..Default::default() });
+    });
+    // Rows stay in the FTS table; with limit 1 the first window (4 candidates) is all missing tracks.
+    s.lib.conn().execute("UPDATE tracks SET missing_since = 1 WHERE title = 'Nova'", []).unwrap();
+    let r = s.lib.search("nova", 1).unwrap();
+    assert_eq!(names(&r.tracks, |t| &t.title), ["Other"]);
+}
+
+#[test]
 fn diacritics_fold_in_tracks_and_artists() {
     let s = scanned(|root| {
         tagged("flac16_44k.flac", &root.join("c.flac"), &Tags { title: Some("Café Society"), artists: &["Zoë Keating"], album: Some("Into the Trees"), ..Default::default() });

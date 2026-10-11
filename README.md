@@ -38,24 +38,24 @@ Measured on Windows 11 Pro, Intel Core i5-12400F, 32 GB RAM, NVMe SSD (100,000 t
 | Step | Result |
 | --- | --- |
 | Generate corpus (one time) | 71.5 s |
-| First scan | 15.2 s (17.3 s on the first run) |
-| Rescan, nothing changed | 2.3 s |
+| First scan | 15.0 s (17.3 s on the first run) |
+| Rescan, nothing changed | 2.2 s |
 | Open an existing 100k library (includes `quick_check`) | about 0.4 s |
 
 | Query | Median |
 | --- | --- |
-| albums by title | 1.2 ms |
-| albums by artist, page at offset 4000 | 8.6 ms |
-| albums by year, descending | 2.7 ms |
-| albums recently added | 15.2 ms |
-| tracks by title, page at offset 50,000 | 25.4 ms |
-| tracks by artist, page at offset 50,000 | 27.5 ms |
+| albums by title | 0.9 ms |
+| albums by artist, page at offset 4000 | 6.5 ms |
+| albums by year, descending | 2.3 ms |
+| albums recently added | 14.5 ms |
+| tracks by title, page at offset 50,000 | 25.8 ms |
+| tracks by artist, page at offset 50,000 | 25.0 ms |
 | tracks of one artist | 0.2 ms |
 | albums of one artist | 0.2 ms |
 | artists page | 0.4 ms |
-| search, artist prefix | 0.8 ms |
-| search, broad 2-character prefix ("ka", about 27,000 matches) | 44.7 ms |
-| search, two words | 3.4 ms |
+| search, artist prefix | 0.5 ms |
+| search, broad 2-character prefix ("ka", about 27,000 matches) | 24.7 ms |
+| search, two words | 1.8 ms |
 | album detail | 0.1 ms |
 | artist detail | 0.3 ms |
 
