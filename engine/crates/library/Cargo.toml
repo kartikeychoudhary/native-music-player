@@ -18,6 +18,8 @@ webp.workspace = true
 blake3.workspace = true
 jwalk.workspace = true
 rayon.workspace = true
+notify.workspace = true
+notify-debouncer-full.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

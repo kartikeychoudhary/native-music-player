@@ -11,6 +11,7 @@ mod rows;
 pub mod scan;
 pub mod search;
 pub mod tags;
+pub mod watch;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
