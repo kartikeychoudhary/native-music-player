@@ -42,6 +42,8 @@ export function livePosition(s: Pick<PlayerStore, 'state' | 'stamp'>, at: number
   return s.state.durationMs != null ? Math.min(p, s.state.durationMs) : p
 }
 
+const trackKey = (s: PlayerState) => `${s.queueIndex ?? ''}|${s.track?.path ?? ''}`
+
 export const usePlayer = create<PlayerStore>()((set, get) => {
   const call: AuroraApi['call'] = (method, params) => {
     const api = get().api
@@ -71,16 +73,31 @@ export const usePlayer = create<PlayerStore>()((set, get) => {
 
     connect(api) {
       set({ api })
+      // The signal path describes one open stream for one track; it carries no track identity, so it
+      // is dropped when the track changes, unless it arrived since the last state (on a gapless
+      // transition the engine sends the new track's signal path just before its state).
+      let lastKey = trackKey(get().state)
+      let signalSinceState = false
+      const applyState = (state: PlayerState) => {
+        const key = trackKey(state)
+        const stale = state.status === 'stopped' || (key !== lastKey && !signalSinceState)
+        lastKey = key
+        signalSinceState = false
+        set(stale ? { state, stamp: now(), signal: null } : { state, stamp: now() })
+      }
       const refresh = async () => {
         try {
           const [state, queue, devices] = await Promise.all([api.call('player.state', {}), api.call('queue.get', {}), api.call('devices.list', {})])
-          set({ state, stamp: now(), queue, devices })
+          // After an engine (re)start any signal path we hold belongs to a stream that no longer exists.
+          lastKey = trackKey(state)
+          signalSinceState = false
+          set({ state, stamp: now(), queue, devices, signal: null })
         } catch { /* the engine isn't ready yet; engine.status will trigger another refresh */ }
       }
       const offs = [
-        api.on('player.state', (state) => set({ state, stamp: now() })),
-        api.on('player.signalPath', (signal) => set({ signal })),
-        api.on('queue.changed', (queue) => set({ queue })),
+        api.on('player.state', applyState),
+        api.on('player.signalPath', (signal) => { signalSinceState = true; set({ signal }) }),
+        api.on('queue.changed', (queue) => set({ queue, signal: null })),
         api.on('devices.changed', (devices) => set({ devices })),
         api.on('engine.error', (error) => set({ error })),
         api.on('engine.status', (engine) => { set({ engine }); if (engine.state === 'ready') void refresh() }),

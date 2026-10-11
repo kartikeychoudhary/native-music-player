@@ -28,6 +28,67 @@ describe('player store', () => {
     expect(usePlayer.getState().error?.name).toBe('UNSUPPORTED_FORMAT')
   })
 
+  describe('signal path', () => {
+    const track = (path: string, queueIndex = 0) => ({ status: 'playing', queueIndex, track: { path, title: 't', durationMs: null }, positionMs: 0, durationMs: null, volume: 1, mode: 'processed', deviceId: null })
+
+    it('clears on queue.changed', () => {
+      const { api, emit } = fakeApi()
+      usePlayer.getState().connect(api as any)
+      emit('player.signalPath', { bitPerfect: true })
+      emit('queue.changed', { items: [], current: null })
+      expect(usePlayer.getState().signal).toBeNull()
+    })
+
+    it('clears on a refresh after the engine becomes ready', async () => {
+      const { api, emit } = fakeApi()
+      usePlayer.getState().connect(api as any)
+      await vi.waitFor(() => expect(api.call).toHaveBeenCalledWith('player.state', {}))
+      emit('player.signalPath', { bitPerfect: true })
+      emit('engine.status', { state: 'ready' })
+      await vi.waitFor(() => expect(usePlayer.getState().signal).toBeNull())
+    })
+
+    it('keeps a signal path that arrives just before the new track state (gapless)', () => {
+      const { api, emit } = fakeApi()
+      usePlayer.getState().connect(api as any)
+      emit('player.state', track('/m/a.flac', 0))
+      emit('player.signalPath', { bitPerfect: true })
+      emit('player.signalPath', { bitPerfect: false })
+      emit('player.state', track('/m/b.flac', 1))
+      expect(usePlayer.getState().signal).toEqual({ bitPerfect: false })
+    })
+
+    it('clears when the track changes and survives same-track state updates', () => {
+      const { api, emit } = fakeApi()
+      usePlayer.getState().connect(api as any)
+      emit('player.state', track('/m/a.flac'))
+      emit('player.signalPath', { bitPerfect: true })
+      emit('player.state', { ...track('/m/a.flac'), positionMs: 500 })
+      expect(usePlayer.getState().signal).toEqual({ bitPerfect: true })
+      emit('player.state', track('/m/b.flac', 1))
+      expect(usePlayer.getState().signal).toBeNull()
+    })
+
+    it('clears when the queue index changes on the same path', () => {
+      const { api, emit } = fakeApi()
+      usePlayer.getState().connect(api as any)
+      emit('player.state', track('/m/a.flac', 0))
+      emit('player.signalPath', { bitPerfect: true })
+      emit('player.state', { ...track('/m/a.flac', 0), positionMs: 250 })
+      emit('player.state', track('/m/a.flac', 1))
+      expect(usePlayer.getState().signal).toBeNull()
+    })
+
+    it('clears when playback stops', () => {
+      const { api, emit } = fakeApi()
+      usePlayer.getState().connect(api as any)
+      emit('player.state', track('/m/a.flac'))
+      emit('player.signalPath', { bitPerfect: true })
+      emit('player.state', { ...track('/m/a.flac'), status: 'stopped', queueIndex: null, track: null })
+      expect(usePlayer.getState().signal).toBeNull()
+    })
+  })
+
   it('openFiles sets the queue and plays', async () => {
     const { api } = fakeApi()
     usePlayer.getState().connect(api as any)
