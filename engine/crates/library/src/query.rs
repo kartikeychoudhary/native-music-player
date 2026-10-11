@@ -72,10 +72,13 @@ impl Library {
         let mut w = Filter::new("a.track_count > 0");
         if let Some(t) = text_of(&f) { w.add("(a.title LIKE ? ESCAPE '\\' OR ar.name LIKE ? ESCAPE '\\')", [like(t), like(t)]); }
         if let Some(id) = f.artist_id {
+            // A UNION of album ids lets SQLite start from the artist's few albums instead of
+            // probing every album row with correlated subqueries.
             w.add(
-                "(a.artist_id = ? OR EXISTS (SELECT 1 FROM album_artists aa WHERE aa.album_id = a.id AND aa.artist_id = ?)
-                  OR EXISTS (SELECT 1 FROM tracks t JOIN track_artists ta ON ta.track_id = t.id
-                             WHERE t.album_id = a.id AND ta.artist_id = ? AND t.missing_since IS NULL))",
+                "a.id IN (SELECT id FROM albums WHERE artist_id = ?
+                          UNION SELECT album_id FROM album_artists WHERE artist_id = ?
+                          UNION SELECT t.album_id FROM track_artists ta JOIN tracks t ON t.id = ta.track_id
+                                WHERE ta.artist_id = ? AND t.missing_since IS NULL)",
                 [Value::Integer(id), Value::Integer(id), Value::Integer(id)],
             );
         }

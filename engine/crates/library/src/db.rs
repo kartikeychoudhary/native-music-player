@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::error::{LibError, Result};
 
-const MIGRATIONS: &[&str] = &[include_str!("schema/001_init.sql")];
+const MIGRATIONS: &[&str] = &[include_str!("schema/001_init.sql"), include_str!("schema/002_live_track_indexes.sql")];
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 const MIRROR: &str = "folders.json";
 
