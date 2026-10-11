@@ -4,7 +4,8 @@ import { launchAurora, musicFolder, tempDir } from './fixture'
 test('add folder → scan → albums → play → search → play next → queue → restart restores', async () => {
   const dataDir = tempDir('aurora-data-')
   const musicDir = musicFolder(['flac16_44k.flac', 'short_a.flac', 'short_b.flac'])
-  // Slow null output: a 2 s track lasts 20 s, so the queue is still on track 1 when we inspect it.
+  // Slow null output (speed 0.1): the 2 s flac16_44k lasts 20 s and the 0.5 s shorts 5 s, so the
+  // queue is still on track 1 when we inspect it.
   let { app, win } = await launchAurora({ dataDir, musicDir, speed: 0.1 })
   try {
     await win.getByRole('button', { name: 'Add a music folder' }).click()

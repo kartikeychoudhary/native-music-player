@@ -64,9 +64,9 @@ License: Public Domain
 
 License: BSD-3-Clause
 
-## lofty, jwalk, notify, image, blake3, souvlaki, rayon
+## lofty, jwalk, notify, notify-debouncer-full, image, blake3, souvlaki, rayon
 
-License: MIT and/or Apache-2.0 (blake3: CC0-1.0 or Apache-2.0; notify: CC0-1.0 or MIT/Apache-2.0)
+License: MIT and/or Apache-2.0 (blake3: CC0-1.0 or Apache-2.0; notify: CC0-1.0)
 
 ## TanStack Router, TanStack Virtual, dnd-kit
 

@@ -30,7 +30,7 @@ The end-to-end tests drive the real app against the real engine with a silent `n
 Aurora indexes the folders you add into a SQLite library. Everything it stores lives in the OS app-data directory (for example `%APPDATA%\Aurora` on Windows, `~/Library/Application Support/Aurora` on macOS, `~/.config/Aurora` on Linux):
 
 - `library.db`, the track, album and artist index
-- `artwork/`, the cover cache (300 px WebP thumbnails)
+- `artwork/`, the cover cache (WebP covers at 64, 300 and 1000 px)
 - `session.json`, the play queue and position, restored paused on launch
 - `settings.json`, window bounds, last view and preferences
 
