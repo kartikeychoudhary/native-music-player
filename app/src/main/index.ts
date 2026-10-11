@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { PROTOCOL_VERSION } from '@protocol/ProtocolVersion'
 import { AUDIO_EXTENSIONS, isAllowedMethod } from '@shared/api'
 import { ART_SCHEME, createArtHandler } from './artProtocol'
-import { engineArgs, resolveDataDir } from './engineArgs'
+import { engineArgs, resolveDataDir, usesSingleInstanceLock } from './engineArgs'
 import { enginePath } from './engine/enginePath'
 import { EngineSupervisor } from './engine/supervisor'
 import { createEventRelay } from './eventRelay'
@@ -18,6 +18,12 @@ protocol.registerSchemesAsPrivileged([{ scheme: ART_SCHEME, privileges: { standa
 
 // Tests point everything (engine data, settings, logs) at a throwaway folder. Unpackaged builds only.
 if (!app.isPackaged && process.env.AURORA_DATA_DIR) app.setPath('userData', process.env.AURORA_DATA_DIR)
+
+// One Aurora at a time: a second launch focuses the running window instead of starting a second
+// engine on the same library. Unpackaged runs with their own AURORA_DATA_DIR skip the lock, so
+// parallel e2e runs (each with a distinct data dir) don't block each other.
+const primary = !usesSingleInstanceLock({ isPackaged: app.isPackaged, env: process.env }) || app.requestSingleInstanceLock()
+if (!primary) app.quit()
 
 let win: BrowserWindow | null = null
 let settings: SettingsStore
@@ -69,7 +75,15 @@ function createWindow() {
   else win.loadFile(page)
 }
 
+app.on('second-instance', () => {
+  if (!win) return
+  if (win.isMinimized()) win.restore()
+  win.show()
+  win.focus()
+})
+
 app.whenReady().then(() => {
+  if (!primary) return
   settings = new SettingsStore(join(app.getPath('userData'), 'settings.json'))
   const engineLog = logger('engine.log')
   supervisor.on('log', engineLog)
@@ -130,7 +144,7 @@ app.whenReady().then(() => {
 
 // Quit only after the engine has shut down cleanly (it writes session.json on the way out).
 app.on('before-quit', (e) => {
-  if (quitting) return
+  if (quitting || !primary) return
   e.preventDefault()
   quitting = true
   saveBounds()
