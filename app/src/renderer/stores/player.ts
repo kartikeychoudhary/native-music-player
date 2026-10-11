@@ -6,6 +6,8 @@ import type { PlayerState } from '@protocol/PlayerState'
 import type { QueueChanged } from '@protocol/QueueChanged'
 import type { SignalPath } from '@protocol/SignalPath'
 import type { AuroraApi, EngineStatus } from '@shared/api'
+import { S } from '../lib/strings'
+import { useUi } from './ui'
 
 export interface PlayerStore {
   api: AuroraApi | null
@@ -27,6 +29,9 @@ export interface PlayerStore {
   setVolume(v: number): Promise<void>
   setMode(m: OutputMode): Promise<void>
   setDevice(id: string | null): Promise<void>
+  playTracks(ids: number[], start?: number, opts?: { shuffle?: boolean }): Promise<void>
+  playNext(ids: number[]): Promise<void>
+  addToQueue(ids: number[]): Promise<void>
   dismissError(): void
 }
 
@@ -136,6 +141,19 @@ export const usePlayer = create<PlayerStore>()((set, get) => {
     },
     async setMode(mode) { await safe(call('player.setMode', { mode })) },
     async setDevice(id) { await safe(call('player.setDevice', { id })) },
+    async playTracks(ids, start = 0, opts) {
+      if (!ids.length) return
+      if (opts?.shuffle !== undefined && !(await safe(call('queue.setShuffle', { shuffle: opts.shuffle })))) return
+      if (!(await safe(call('queue.set', { trackIds: ids, startIndex: Math.min(start, ids.length - 1) })))) return
+      set({ error: null })
+      await safe(call('player.play', {}))
+    },
+    async playNext(ids) {
+      if (ids.length && (await safe(call('queue.insertNext', { trackIds: ids })))) useUi.getState().toast('info', S.queuedNext(ids.length))
+    },
+    async addToQueue(ids) {
+      if (ids.length && (await safe(call('queue.add', { trackIds: ids })))) useUi.getState().toast('info', S.queuedLast(ids.length))
+    },
     dismissError: () => set({ error: null }),
   }
 })

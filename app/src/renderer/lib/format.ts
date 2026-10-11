@@ -1,6 +1,8 @@
+import type { AlbumRow } from '@protocol/AlbumRow'
 import type { BluetoothInfo } from '@protocol/BluetoothInfo'
 import type { SignalPath } from '@protocol/SignalPath'
 import type { SourceSummary } from '@protocol/SourceSummary'
+import type { TrackRow } from '@protocol/TrackRow'
 
 export function formatTime(ms: number): string {
   const t = Math.max(0, Math.floor(ms / 1000))
@@ -38,4 +40,21 @@ export function bluetoothLabel(bt: BluetoothInfo): string {
   if (bt.bitrateKbps) return `${name} · ${bt.bitrateKbps} kbps`
   if (bt.quality) return `${name} · ${bt.quality}`
   return name
+}
+
+export function formatDuration(ms: number): string {
+  const min = Math.floor(Math.max(0, ms) / 60_000)
+  return min >= 60 ? `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, '0')} min` : `${min} min`
+}
+
+type Fmt = Pick<TrackRow, 'codec' | 'container' | 'bitrateKbps' | 'sampleRate' | 'bitDepth' | 'channels'>
+
+/** Library format label; DSD rows store the DSD bit rate as their sample rate. */
+export function trackFormat(t: Fmt): string {
+  if (!t.codec || !t.sampleRate) return ''
+  return formatBadge({ container: t.container, codec: t.codec, bitrateKbps: t.bitrateKbps, sampleRate: t.sampleRate, bitDepth: t.bitDepth, channels: t.channels ?? 2, dsdRate: t.codec === 'dsd' ? t.sampleRate : null })
+}
+
+export function albumFormat(a: Pick<AlbumRow, 'codec' | 'maxSampleRate' | 'maxBitDepth'>): string {
+  return trackFormat({ codec: a.codec, container: a.codec ?? '', bitrateKbps: null, sampleRate: a.maxSampleRate, bitDepth: a.maxBitDepth, channels: 2 })
 }

@@ -1,6 +1,6 @@
 import { render } from '@testing-library/react'
 import { act } from 'react'
-import { createMemoryHistory, RouterProvider } from '@tanstack/react-router'
+import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router'
 import { vi } from 'vitest'
 import type { AuroraApi, Methods } from '../src/shared/api'
 import { createAppRouter } from '../src/renderer/router'
@@ -60,5 +60,19 @@ export async function renderAt(path: string, api: AuroraApi = fakeApi().api) {
   usePlayer.getState().connect(api)
   useLibrary.getState().connect(api)
   await act(async () => { render(<RouterProvider router={router} />) })
+  return { router }
+}
+
+export const track = (id: number, title: string, extra: Record<string, unknown> = {}) => ({
+  id, path: `/m/${title}.flac`, title, artist: 'Alpha', artistId: 1, album: 'Light', albumId: 2, albumArtist: null, trackNo: id, discNo: 1,
+  year: 2001, genre: null, durationMs: 61_000, codec: 'flac', container: 'flac', bitrateKbps: null, sampleRate: 44100, bitDepth: 16,
+  channels: 2, artworkId: null, missing: false, unplayable: null, playCount: 0, addedAt: 0, lastPlayedAt: null, ...extra,
+}) as never
+
+/** Renders `ui` alone inside a router (components that navigate need router context). */
+export async function renderInRouter(ui: React.ReactNode) {
+  const root = createRootRoute({ component: () => <>{ui}</> })
+  const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: ['/'] }) })
+  await act(async () => { render(<RouterProvider router={router as never} />) })
   return { router }
 }

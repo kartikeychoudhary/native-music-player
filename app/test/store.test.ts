@@ -140,3 +140,26 @@ describe('player store', () => {
     expect(usePlayer.getState().error).toBeNull()
   })
 })
+
+describe('queue actions', () => {
+  beforeEach(() => usePlayer.setState(usePlayer.getInitialState()))
+
+  it('plays tracks by id, optionally shuffled', async () => {
+    const { api } = fakeApi()
+    usePlayer.getState().connect(api as any)
+    await usePlayer.getState().playTracks([4, 5, 6], 1)
+    expect(api.call).toHaveBeenCalledWith('queue.set', { trackIds: [4, 5, 6], startIndex: 1 })
+    expect(api.call).toHaveBeenLastCalledWith('player.play', {})
+    await usePlayer.getState().playTracks([4, 5, 6], 0, { shuffle: true })
+    expect(api.call).toHaveBeenCalledWith('queue.setShuffle', { shuffle: true })
+  })
+
+  it('queues next and last', async () => {
+    const { api } = fakeApi()
+    usePlayer.getState().connect(api as any)
+    await usePlayer.getState().playNext([7])
+    await usePlayer.getState().addToQueue([8, 9])
+    expect(api.call).toHaveBeenCalledWith('queue.insertNext', { trackIds: [7] })
+    expect(api.call).toHaveBeenCalledWith('queue.add', { trackIds: [8, 9] })
+  })
+})

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bitPerfectLabel, bluetoothLabel, formatBadge, formatTime, khz } from '../src/renderer/lib/format'
+import { albumFormat, bitPerfectLabel, bluetoothLabel, formatBadge, formatDuration, formatTime, khz, trackFormat } from '../src/renderer/lib/format'
 
 const src = (o: object) => ({ container: 'flac', codec: 'flac', bitrateKbps: 2304, sampleRate: 96000, bitDepth: 24, channels: 2, dsdRate: null, ...o }) as any
 
@@ -27,5 +27,25 @@ describe('format', () => {
     expect(bluetoothLabel({ codec: 'ldac', quality: 'auto', bitrateKbps: null })).toBe('LDAC · auto')
     expect(bluetoothLabel({ codec: 'aac', quality: null, bitrateKbps: null })).toBe('AAC')
     expect(bluetoothLabel({ codec: null, quality: null, bitrateKbps: null })).toBe('Codec not reported by the OS')
+  })
+})
+
+const row = (o: Partial<Parameters<typeof trackFormat>[0]>) => ({ codec: 'flac', container: 'flac', bitrateKbps: null, sampleRate: 96000, bitDepth: 24, channels: 2, ...o }) as Parameters<typeof trackFormat>[0]
+
+describe('library formats', () => {
+  it('formats track formats like the player badge', () => {
+    expect(trackFormat(row({}))).toBe('FLAC 24/96')
+    expect(trackFormat(row({ codec: 'mp3', container: 'mp3', bitrateKbps: 320, bitDepth: null, sampleRate: 44100 }))).toBe('MP3 320k')
+    expect(trackFormat(row({ codec: 'dsd', container: 'dsf', sampleRate: 2822400, bitDepth: null }))).toBe('DSD64')
+    expect(trackFormat(row({ codec: null, sampleRate: null }))).toBe('')
+  })
+  it('formats album formats from the most common codec and best resolution', () => {
+    expect(albumFormat({ codec: 'alac', maxSampleRate: 44100, maxBitDepth: 16 } as never)).toBe('ALAC 16/44.1')
+    expect(albumFormat({ codec: null, maxSampleRate: null, maxBitDepth: null } as never)).toBe('')
+  })
+  it('formats long durations', () => {
+    expect(formatDuration(42 * 60_000 + 5_000)).toBe('42 min')
+    expect(formatDuration(65 * 60_000)).toBe('1 h 05 min')
+    expect(formatDuration(10_000)).toBe('0 min')
   })
 })
