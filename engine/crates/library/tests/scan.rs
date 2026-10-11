@@ -338,3 +338,17 @@ fn unplugged_root_is_not_purged_and_not_stamped() {
     std::fs::rename(&unplugged, &r).unwrap();
     assert_eq!(scan(&fx).restored, 3);
 }
+
+#[test]
+fn albums_become_visible_while_the_scan_is_still_reading() {
+    let fx = setup();
+    build_tree(&root(&fx));
+    let opts = ScanOptions { checkpoint_every: Some(Duration::ZERO), ..Default::default() };
+    let mut seen = None;
+    fx.lib.scanner(opts).unwrap().scan(fx.folder, &[], true, &mut |p| {
+        if p.phase == ScanPhase::Reading && p.processed > 0 && seen.is_none() {
+            seen = Some(fx.lib.albums(&protocol::ListQuery::default()).unwrap().total);
+        }
+    }, &AtomicBool::new(false)).unwrap();
+    assert_eq!(seen, Some(2), "both albums listed before the scan finished");
+}

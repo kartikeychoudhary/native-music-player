@@ -24,7 +24,6 @@ function RecentTracks({ kind, title }: { kind: 'played' | 'mostPlayed'; title: s
 export function HomeView() {
   const folders = useLibrary((l) => l.folders)
   const foldersLoaded = useLibrary((l) => l.foldersLoaded)
-  const scan = useLibrary((l) => l.scan)
   const playlists = useLibrary((l) => l.playlists)
   const { openFiles, playPaths, api } = usePlayer.getState()
   const added = useEngineQuery(['recent', 'added'], (a) => a.call('library.recent', { kind: 'added', limit: 12 }))
@@ -37,7 +36,6 @@ export function HomeView() {
     <div className={v.view} onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
       <div className={v.toolbar}>
         <h1 className={v.title}>{S.homeTitle}</h1>
-        {scan && <span className={v.meta} role="status">{S.scanning(scan.processed, scan.total)}</span>}
       </div>
       {!foldersLoaded ? null : folders.length === 0 ? (
         <div className={v.empty}>

@@ -34,4 +34,17 @@ describe('settings', () => {
     expect(screen.getByText('Ctrl/Cmd + F')).toBeTruthy()
     expect(screen.getByText(/Lucide/)).toBeTruthy()
   })
+
+  it('shows a running scan on its folder and in the sidebar until it ends', async () => {
+    const { api, emit } = fakeApi({ 'library.folders': () => folders })
+    await renderAt('/settings', api)
+    const list = await screen.findByRole('list', { name: 'Library folders' })
+    emit('library.scanProgress', { folderId: 1, phase: 'reading', processed: 120, total: 900, added: 120, updated: 0, missing: 0 })
+    const row = within(list).getByText('/music').closest('li')!
+    expect(within(row).getByRole('progressbar', { name: 'Scanning 120 / 900' })).toBeTruthy()
+    expect(within(screen.getByRole('navigation', { name: 'Main' })).getByRole('status').textContent).toContain('Scanning 120 / 900')
+    emit('library.scanProgress', { folderId: 1, phase: 'done', processed: 900, total: 900, added: 900, updated: 0, missing: 0 })
+    expect(within(row).queryByRole('progressbar')).toBeNull()
+    expect(within(screen.getByRole('navigation', { name: 'Main' })).queryByRole('status')).toBeNull()
+  })
 })

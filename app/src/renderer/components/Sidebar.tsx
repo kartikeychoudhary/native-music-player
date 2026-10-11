@@ -4,6 +4,8 @@ import { isActive, NAV } from '../lib/nav'
 import { S } from '../lib/strings'
 import { useLibrary } from '../stores/library'
 import { useUi } from '../stores/ui'
+import { ScanStatus } from './ScanStatus'
+import st from './ScanStatus.module.css'
 import s from '../Layout.module.css'
 
 export function Sidebar({ children }: { children?: React.ReactNode }) {
@@ -29,6 +31,7 @@ export function Sidebar({ children }: { children?: React.ReactNode }) {
         })}
       </ul>
       {expanded && children}
+      <ScanStatus compact={!expanded} className={st.sidebar} />
     </nav>
   )
 }

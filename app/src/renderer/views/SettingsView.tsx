@@ -2,6 +2,7 @@ import { FolderPlus, RefreshCw, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { DevicePicker } from '../components/DevicePicker'
+import { ScanStatus } from '../components/ScanStatus'
 import { SHORTCUTS } from '../lib/shortcuts'
 import { S } from '../lib/strings'
 import { useLibrary } from '../stores/library'
@@ -33,6 +34,7 @@ export function SettingsView() {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div className="mono" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.path}</div>
                 <div className={v.meta}>{S.trackCount(f.trackCount)} · {S.lastScan(f.lastScanAt)}{!f.available && <> · <span style={{ color: 'var(--danger)' }}>{S.unavailable}</span></>}</div>
+                <ScanStatus folderId={f.id} className={v.meta} />
               </div>
               <button className={v.ghost} aria-label={S.rescan} onClick={() => void lib.rescan(f.id)}><RefreshCw size={14} /></button>
               <button className={v.ghost} aria-label={S.remove} onClick={() => setRemoving({ id: f.id, path: f.path })}><Trash2 size={14} /></button>

@@ -11,7 +11,7 @@ use crossbeam_channel::{Receiver, Sender};
 use library::scan::{Fallback, ScanOptions, Scanner};
 use library::watch::{group_by_folder, Watcher};
 use library::{LibError, Library, OpenReport};
-use protocol::{EngineErrorEvent, ErrorCode, Folder, LibraryChanged, LibraryScope};
+use protocol::{EngineErrorEvent, ErrorCode, Folder, LibraryChanged, LibraryScope, ScanPhase, ScanProgress};
 
 use super::writer::Writer;
 
@@ -40,6 +40,21 @@ pub fn coalesce(jobs: Vec<ScanJob>) -> Vec<ScanJob> {
         }
     }
     out
+}
+
+/// Decides when a running scan tells clients to refetch, so tracks show up while a big folder is
+/// still being read: on the first stored batch, then at most once a second while more arrive.
+#[derive(Default)]
+pub struct LiveChanges { announced: u64, at: Option<Instant> }
+
+impl LiveChanges {
+    pub fn due(&mut self, p: &ScanProgress, now: Instant) -> bool {
+        let stored = p.added + p.updated;
+        let fresh = p.phase == ScanPhase::Reading && stored > self.announced;
+        if !fresh || self.at.is_some_and(|t| now.duration_since(t) < Duration::from_secs(1)) { return false; }
+        (self.announced, self.at) = (stored, Some(now));
+        true
+    }
 }
 
 pub fn changed(out: &Writer, scopes: &[LibraryScope]) {
@@ -94,7 +109,11 @@ fn scan_worker(mut scanner: Scanner, rx: Receiver<Msg>, out: Arc<Writer>, state:
                 state.cancel.store(false, SeqCst);
             }
             // The scanner ends every scan it started with a `done` progress event, even on error.
-            let result = scanner.scan(job.folder_id, &job.roots, job.full, &mut |p| out.notify("library.scanProgress", p), &state.cancel);
+            let mut live = LiveChanges::default();
+            let result = scanner.scan(job.folder_id, &job.roots, job.full, &mut |p| {
+                out.notify("library.scanProgress", p);
+                if live.due(p, Instant::now()) { changed(&out, &[LibraryScope::Tracks]); }
+            }, &state.cancel);
             let removed = {
                 let mut jobs = state.jobs.lock().unwrap();
                 jobs.scanning = None;
@@ -119,7 +138,7 @@ impl LibraryService {
     pub fn open(dir: &Path, out: Arc<Writer>, fallback: Fallback) -> Result<Self, LibError> {
         let (lib, report) = Library::open(dir)?;
         let lib = Arc::new(lib);
-        let scanner = lib.scanner(ScanOptions { fallback: Some(fallback), now: None })?;
+        let scanner = lib.scanner(ScanOptions { fallback: Some(fallback), ..Default::default() })?;
         let (tx, rx) = crossbeam_channel::unbounded();
         let state = Arc::new(WorkerState::default());
         let worker = {
@@ -241,5 +260,22 @@ mod tests {
         assert_eq!(got, vec![job(1, &["/a/x", "/a/y"], false), job(2, &[], true)]);
         let got = coalesce(vec![job(1, &["/a/x"], false), job(1, &[], true)]);
         assert_eq!(got, vec![job(1, &[], true)]);
+    }
+
+    fn reading(added: u64) -> ScanProgress {
+        ScanProgress { folder_id: 1, phase: ScanPhase::Reading, processed: added, total: 100, added, updated: 0, missing: 0 }
+    }
+
+    #[test]
+    fn a_running_scan_announces_new_tracks_at_most_once_a_second() {
+        let t0 = Instant::now();
+        let mut live = LiveChanges::default();
+        assert!(!live.due(&reading(0), t0), "nothing stored yet");
+        assert!(live.due(&reading(500), t0), "the first stored batch shows at once");
+        assert!(!live.due(&reading(1000), t0 + Duration::from_millis(400)), "throttled");
+        assert!(live.due(&reading(1000), t0 + Duration::from_millis(1100)));
+        assert!(!live.due(&reading(1000), t0 + Duration::from_secs(3)), "nothing new");
+        let walking = ScanProgress { phase: ScanPhase::Walking, ..reading(2000) };
+        assert!(!live.due(&walking, t0 + Duration::from_secs(5)), "only stored tracks count");
     }
 }

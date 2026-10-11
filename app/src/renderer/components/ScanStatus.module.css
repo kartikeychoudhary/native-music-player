@@ -1,0 +1,9 @@
+.status { display: flex; flex-direction: column; gap: 5px; font-size: 11.5px; color: var(--text-muted); }
+.line { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.spin { animation: spin 1.2s linear infinite; flex: none; color: var(--accent); }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+.bar { appearance: none; width: 100%; height: 3px; border: 0; border-radius: 2px; background: var(--raised); overflow: hidden; }
+.bar::-webkit-progress-bar { background: var(--raised); }
+.bar::-webkit-progress-value { background: var(--accent); transition: width 200ms linear; }
+.sidebar { margin-top: auto; padding: 8px 11px; width: 100%; box-sizing: border-box; }

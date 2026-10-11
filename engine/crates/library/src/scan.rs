@@ -19,6 +19,11 @@ pub type Fallback = Arc<dyn Fn(&Path) -> Option<AudioProps> + Send + Sync>;
 pub const MISSING_RETENTION_SECS: i64 = 30 * 24 * 3600;
 const BATCH: usize = 500;
 const PROGRESS_EVERY: Duration = Duration::from_millis(100);
+/// A long scan shows what it has found this often, instead of only when it finishes.
+const CHECKPOINT_EVERY: Duration = Duration::from_secs(1);
+/// Refreshing counts recomputes them over the whole library, so a checkpoint waits at least this
+/// many times as long as the last refresh took: on a big library the overhead stays near 5%.
+const CHECKPOINT_COST_FACTOR: u32 = 20;
 
 #[derive(Clone, Default)]
 pub struct ScanOptions {
@@ -26,6 +31,9 @@ pub struct ScanOptions {
     pub fallback: Option<Fallback>,
     /// Clock override (unix seconds) for tests.
     pub now: Option<i64>,
+    /// How often a running scan makes what it has stored so far visible (album, artist and genre
+    /// counts refreshed, a progress event sent). Default `CHECKPOINT_EVERY`.
+    pub checkpoint_every: Option<Duration>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -348,6 +356,9 @@ fn run_scan(
     prog.total = to_read.len() as u64;
     progress(prog);
     let mut last = Instant::now();
+    let checkpoint_every = opts.checkpoint_every.unwrap_or(CHECKPOINT_EVERY);
+    let mut last_checkpoint = Instant::now();
+    let mut refresh_cost = Duration::ZERO;
     let mut rest = to_read;
     while !rest.is_empty() {
         cancelled(cancel)?;
@@ -371,11 +382,20 @@ fn run_scan(
             upsert(&tx, folder_id, r, h.as_deref(), now)?;
             if existing.contains_key(&r.cand.key) { summary.updated += 1 } else { summary.added += 1 }
         }
+        // Checkpoint: albums, artists and genres are listed by their counts, so refreshing them
+        // lets a client show this batch now. The progress event after it tells the client to look.
+        let checkpoint = last_checkpoint.elapsed() >= checkpoint_every.max(refresh_cost * CHECKPOINT_COST_FACTOR);
+        if checkpoint {
+            let started = Instant::now();
+            db::refresh_stats(&tx)?;
+            refresh_cost = started.elapsed();
+        }
         tx.commit()?;
         prog.processed += n;
         prog.added = summary.added;
         prog.updated = summary.updated;
-        if last.elapsed() >= PROGRESS_EVERY { progress(prog); last = Instant::now(); }
+        if checkpoint || last.elapsed() >= PROGRESS_EVERY { progress(prog); last = Instant::now(); }
+        if checkpoint { last_checkpoint = Instant::now(); }
     }
 
     prog.phase = ScanPhase::Finishing;
