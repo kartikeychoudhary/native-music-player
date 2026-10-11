@@ -132,3 +132,29 @@ fn dff_with_enormous_subchunk_size_is_rejected() {
     assert_rejected(&dff_with_size("fs_huge.dff", b"FS  ", u64::MAX - 8));
     assert_rejected(&dff_with_size("prop_huge.dff", b"PROP", u64::MAX - 8));
 }
+
+/// Opening, switching output, seeking and decoding must never panic; errors are fine.
+fn exercise(path: &std::path::Path) {
+    let Ok(mut dec) = DsdDecoder::open(path) else { return };
+    for mode in [DsdOutput::Dop, DsdOutput::Pcm] {
+        dec.set_dsd_output(mode);
+        let _ = dec.info().total_frames;
+        for frame in [0, 88_200, u64::MAX / 2, u64::MAX] {
+            if dec.seek(frame).is_ok() { let _ = dec.next_block(); }
+        }
+    }
+}
+
+#[test]
+fn dsf_with_huge_sample_count_does_not_panic() {
+    // DSF fmt: sample count (u64) at +24.
+    let path = patched("dsd64.dsf", "samples_max.dsf", |b| b[40 + 24..40 + 32].copy_from_slice(&u64::MAX.to_le_bytes()));
+    exercise(&path);
+    let dec = DsdDecoder::open(&path);
+    if let Ok(dec) = dec { assert!(dec.info().total_frames.is_some()); }
+    // Eight channels maximise the per-block byte offset arithmetic.
+    exercise(&patched("dsd64.dsf", "samples_max_8ch.dsf", |b| {
+        b[40 + 24..40 + 32].copy_from_slice(&u64::MAX.to_le_bytes());
+        b[40 + 12..40 + 16].copy_from_slice(&8u32.to_le_bytes());
+    }));
+}

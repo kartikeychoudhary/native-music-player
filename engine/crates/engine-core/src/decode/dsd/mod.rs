@@ -35,6 +35,13 @@ fn validate_format(container: &str, channels: u64, rate: u64) -> Result<(u16, u3
     Ok((channels, rate))
 }
 
+/// PCM frames for `bytes` per channel of 1-bit DSD at `dsd_rate`, decimated to `out_rate`. u128
+/// math, saturated, so a crafted header's sample count can't overflow.
+fn pcm_frames(bytes: u64, out_rate: u32, dsd_rate: u32) -> u64 {
+    let frames = u128::from(bytes) * 8 * u128::from(out_rate) / u128::from(dsd_rate.max(1));
+    u64::try_from(frames).unwrap_or(u64::MAX)
+}
+
 pub struct DsdDecoder {
     src: Box<dyn DsdSource>,
     mode: DsdOutput,
@@ -64,13 +71,13 @@ impl DsdDecoder {
             decoder_name: "dsd",
             dsd_rate: Some(rate),
         };
-        info.total_frames = Some(src.total_bytes_per_channel() * 8 * dec.output_rate() as u64 / rate as u64);
+        info.total_frames = Some(pcm_frames(src.total_bytes_per_channel(), dec.output_rate(), rate));
         Ok(Self { bufs: vec![Vec::new(); ch as usize], src, mode: DsdOutput::Pcm, dec, dop: DopPacker::new(), info })
     }
 
     fn bytes_to_frames(&self, bytes: u64) -> u64 {
         match self.mode {
-            DsdOutput::Pcm => bytes * 8 * self.info.spec.sample_rate as u64 / self.src.dsd_rate() as u64,
+            DsdOutput::Pcm => pcm_frames(bytes, self.info.spec.sample_rate, self.src.dsd_rate()),
             DsdOutput::Dop => bytes / 2,
         }
     }
