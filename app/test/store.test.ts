@@ -41,4 +41,41 @@ describe('player store', () => {
     expect(livePosition({ state: { status: 'paused', positionMs: 1000 } as any, stamp: 100 }, 350)).toBe(1000)
     expect(livePosition({ state: { status: 'playing', positionMs: 1000, durationMs: 1100 } as any, stamp: 0 }, 5000)).toBe(1100)
   })
+
+  it('surfaces a failed queue.setPaths as an error and does not start playback', async () => {
+    const { api } = fakeApi()
+    const call = api.call
+    api.call = vi.fn(async (m: string) => { if (m === 'queue.setPaths') throw new Error('bad path'); return call(m) }) as any
+    usePlayer.getState().connect(api as any)
+    await usePlayer.getState().playPaths(['/m/a.flac'])
+    expect(usePlayer.getState().error).toMatchObject({ code: -32000, name: 'REQUEST_FAILED', message: 'bad path', path: null })
+    expect(api.call).not.toHaveBeenCalledWith('player.play', expect.anything())
+  })
+
+  it('surfaces a failed open dialog without an unhandled rejection', async () => {
+    const { api } = fakeApi()
+    api.openFiles = vi.fn(async () => { throw new Error('dialog failed') })
+    usePlayer.getState().connect(api as any)
+    await expect(usePlayer.getState().openFiles()).resolves.toBeUndefined()
+    expect(usePlayer.getState().error?.message).toBe('dialog failed')
+  })
+
+  it('surfaces failed setMode / setDevice', async () => {
+    const { api } = fakeApi()
+    api.call = vi.fn(async () => { throw new Error('nope') }) as any
+    usePlayer.getState().connect(api as any)
+    await usePlayer.getState().setMode('bitPerfect')
+    expect(usePlayer.getState().error?.name).toBe('REQUEST_FAILED')
+    usePlayer.getState().dismissError()
+    await usePlayer.getState().setDevice('x')
+    expect(usePlayer.getState().error?.message).toBe('nope')
+  })
+
+  it('clears a stale error after a successful playPaths', async () => {
+    const { api } = fakeApi()
+    usePlayer.getState().connect(api as any)
+    usePlayer.setState({ error: { code: -32000, name: 'REQUEST_FAILED', message: 'old', path: null } })
+    await usePlayer.getState().playPaths(['/m/a.flac'])
+    expect(usePlayer.getState().error).toBeNull()
+  })
 })

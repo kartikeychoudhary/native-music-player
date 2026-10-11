@@ -5,6 +5,7 @@ import { Home } from './components/Home'
 import { IconRail } from './components/IconRail'
 import { PlayerBar } from './components/PlayerBar'
 import { SignalPathPanel } from './components/SignalPathPanel'
+import { handleShortcut } from './lib/shortcuts'
 import { usePlayer } from './stores/player'
 import s from './App.module.css'
 
@@ -13,15 +14,7 @@ export function App({ api }: { api: AuroraApi }) {
   const signal = usePlayer((p) => p.signal)
   useEffect(() => usePlayer.getState().connect(api), [api])
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement)?.tagName === 'INPUT' || (e.target as HTMLElement)?.tagName === 'SELECT') return
-      const p = usePlayer.getState()
-      if (e.code === 'Space') { e.preventDefault(); void p.toggle() }
-      else if (e.key === 'ArrowRight' && e.shiftKey) void p.next()
-      else if (e.key === 'ArrowLeft' && e.shiftKey) void p.prev()
-      else if (e.key === 'ArrowRight') void p.seek(p.state.positionMs + 5000)
-      else if (e.key === 'ArrowLeft') void p.seek(Math.max(0, p.state.positionMs - 5000))
-    }
+    const onKey = (e: KeyboardEvent) => { handleShortcut(e, usePlayer.getState(), performance.now()) }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])

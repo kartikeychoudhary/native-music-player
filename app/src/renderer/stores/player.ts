@@ -47,7 +47,16 @@ export const usePlayer = create<PlayerStore>()((set, get) => {
     const api = get().api
     return api ? api.call(method, params) : Promise.reject(new Error('not connected'))
   }
-  const safe = async (p: Promise<unknown>) => { try { await p } catch (e) { console.warn(e) } }
+  // Runs a request; a rejection becomes a visible `error` (the IPC layer only carries the message) and resolves false.
+  const safe = async (p: Promise<unknown>): Promise<boolean> => {
+    try {
+      await p
+      return true
+    } catch (e) {
+      set({ error: { code: -32000, name: 'REQUEST_FAILED', message: e instanceof Error ? e.message : String(e), path: null } })
+      return false
+    }
+  }
 
   return {
     api: null,
@@ -83,17 +92,26 @@ export const usePlayer = create<PlayerStore>()((set, get) => {
     async openFiles() {
       const api = get().api
       if (!api) return
-      const paths = await api.openFiles()
+      let paths: string[]
+      try {
+        paths = await api.openFiles()
+      } catch (e) {
+        await safe(Promise.reject(e))
+        return
+      }
       if (paths.length) await get().playPaths(paths)
     },
     async playPaths(paths) {
-      await safe(call('queue.setPaths', { paths, startIndex: 0 }))
+      if (!(await safe(call('queue.setPaths', { paths, startIndex: 0 })))) return
+      set({ error: null })
       await safe(call('player.play', {}))
     },
-    playItem: (id) => safe(call('player.play', { queueItemId: id })),
-    toggle: () => safe(call('player.toggle', {})),
-    next: () => safe(call('player.next', {})),
-    prev: () => safe(call('player.prev', {})),
+    async playItem(id) {
+      if (await safe(call('player.play', { queueItemId: id }))) set({ error: null })
+    },
+    async toggle() { await safe(call('player.toggle', {})) },
+    async next() { await safe(call('player.next', {})) },
+    async prev() { await safe(call('player.prev', {})) },
     async seek(ms) {
       set((s) => ({ state: { ...s.state, positionMs: ms }, stamp: now() }))
       await safe(call('player.seek', { ms: Math.round(ms) }))
@@ -102,8 +120,8 @@ export const usePlayer = create<PlayerStore>()((set, get) => {
       set((s) => ({ state: { ...s.state, volume } }))
       await safe(call('player.setVolume', { volume }))
     },
-    setMode: (mode) => safe(call('player.setMode', { mode })),
-    setDevice: (id) => safe(call('player.setDevice', { id })),
+    async setMode(mode) { await safe(call('player.setMode', { mode })) },
+    async setDevice(id) { await safe(call('player.setDevice', { id })) },
     setPanel: (panel) => set({ panel }),
     dismissError: () => set({ error: null }),
   }
