@@ -52,6 +52,10 @@ jobs:
         run: find shared/protocol -name '*.ts' -delete
       - name: Engine tests
         run: cargo test --manifest-path engine/Cargo.toml --workspace
+      - name: Library benchmark (20k tracks, Linux)
+        if: runner.os == 'Linux'
+        env: { AURORA_BENCH_TRACKS: '20000' }
+        run: cargo test --release --manifest-path engine/Cargo.toml -p library --test bench_100k -- --ignored --nocapture
       - name: Engine tests without fdk-aac
         run: cargo test --manifest-path engine/Cargo.toml -p engine-core --no-default-features --test open
       # Clippy runs on every OS: coreaudio_hog.rs, alsa_hw.rs and the PipeWire probe are cfg-gated per platform.

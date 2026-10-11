@@ -15,6 +15,9 @@ import { boundsVisible, SettingsStore } from './settings'
 
 protocol.registerSchemesAsPrivileged([{ scheme: ART_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }])
 
+// Tests point everything (engine data, settings, logs) at a throwaway folder. Unpackaged builds only.
+if (!app.isPackaged && process.env.AURORA_DATA_DIR) app.setPath('userData', process.env.AURORA_DATA_DIR)
+
 let win: BrowserWindow | null = null
 let settings: SettingsStore
 let quitting = false

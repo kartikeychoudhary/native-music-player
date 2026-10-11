@@ -2,7 +2,7 @@
 
 Aurora is a native hi-res music player: a Rust audio engine (`aurora-engine`) runs as a sidecar process and an Electron app provides the UI. The two talk JSON-RPC 2.0 over stdio.
 
-This is milestone 1: the audio engine and the app shell. Playback of local files, the signal-path panel and the bit-perfect toggle work. Library, EQ, lyrics and the other planned features are not built yet.
+This is milestone 2: the audio engine, the app shell and the music library. Playback of local files, the signal-path panel, the bit-perfect toggle, library browsing (albums, artists, genres, playlists), search and the play queue work. EQ, lyrics and the other planned features are not built yet.
 
 ## Prerequisites
 
@@ -20,10 +20,23 @@ npm --prefix app install   # once, to install the app dependencies
 npm run fixtures           # generate audio fixtures into fixtures/out (needs ffmpeg and bash)
 npm run dev                # build the engine, then start the Electron app in dev mode
 npm test                   # engine tests (cargo) and app unit tests (vitest)
-npm run e2e                # build the engine and the app, then run the Electron smoke test
+npm run e2e                # build the engine and the app, then run the Electron smoke tests
 ```
 
-The end-to-end test drives the real app against the real engine with a silent `null` output (`AURORA_OUTPUT=null`), so it needs no audio device. It expects the fixtures from `npm run fixtures`.
+The end-to-end tests drive the real app against the real engine with a silent `null` output (`AURORA_OUTPUT=null`) and a throwaway data directory, so they need no audio device and never touch your library. They expect the fixtures from `npm run fixtures`.
+
+## Library
+
+Aurora indexes the folders you add into a SQLite library. Everything it stores lives in the OS app-data directory (for example `%APPDATA%\Aurora` on Windows, `~/Library/Application Support/Aurora` on macOS, `~/.config/Aurora` on Linux):
+
+- `library.db`, the track, album and artist index
+- `artwork/`, the cover cache (300 px WebP thumbnails)
+- `session.json`, the play queue and position, restored paused on launch
+- `settings.json`, window bounds, last view and preferences
+
+The engine takes the location as `aurora-engine rpc --data-dir <dir>`. In unpackaged runs, setting `AURORA_DATA_DIR` points both the engine and the app's own settings and logs at a different folder, which is how the end-to-end tests stay away from your real library.
+
+A file watcher picks up changes in the added folders within about 2 s. Files that disappear are kept as missing for 30 days (so an unplugged drive does not wipe your playlists) and are then removed.
 
 ## Library benchmark
 
@@ -60,6 +73,12 @@ Measured on Windows 11 Pro, Intel Core i5-12400F, 32 GB RAM, NVMe SSD (100,000 t
 | artist detail | 0.3 ms |
 
 Windows Defender real-time scanning can slow corpus generation and the first scan. If the scan misses its target, exclude the target directory or run the test a second time.
+
+## Known limitations (M2)
+
+- DSF and DFF files are indexed with their file names as titles. Tag reading for the DSD containers comes later.
+- macOS media keys are best-effort.
+- The Windows media flyout shows the engine executable's name until the M4 installer sets an app identity. It may also not show cover art: the 300 px cache is WebP, which the system media transport controls did not load in testing.
 
 ## Bluetooth codec display
 
