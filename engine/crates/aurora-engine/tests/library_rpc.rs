@@ -74,3 +74,165 @@ fn add_folder_errors_are_typed() {
     assert_eq!(e.call("library.album", json!({ "id": 42 }))["error"]["code"], -32001);
     assert_eq!(e.call("library.nothing", json!({}))["error"]["code"], -32601);
 }
+
+fn scanned_engine(data: &std::path::Path, music: &std::path::Path) -> (Engine, Vec<i64>) {
+    let mut e = with_library(data);
+    e.ok("library.addFolder", json!({ "path": music }));
+    wait_scan_done(&mut e);
+    let tracks = e.ok("library.tracks", json!({ "sort": "title" }));
+    let ids = tracks["items"].as_array().unwrap().iter().map(|t| t["id"].as_i64().unwrap()).collect();
+    (e, ids)
+}
+
+fn titles(q: &Value) -> Vec<String> { q["items"].as_array().unwrap().iter().map(|i| i["title"].as_str().unwrap().to_string()).collect() }
+
+#[test]
+fn queue_edits_over_rpc() {
+    let data = tempfile::tempdir().unwrap();
+    let music = music_dir(&["gap_a.flac", "short_a.flac", "short_b.flac"]);
+    let (mut e, ids) = scanned_engine(data.path(), music.path()); // title order: gap_a, short_a, short_b
+    e.ok("queue.set", json!({ "trackIds": [ids[0]] }));
+    e.ok("queue.add", json!({ "trackIds": [ids[1]] }));
+    e.ok("queue.insertNext", json!({ "trackIds": [ids[2]] }));
+    let q = e.notified("queue.changed", |p| p["items"].as_array().is_some_and(|i| i.len() == 3));
+    assert_eq!(titles(&q), ["gap_a", "short_b", "short_a"]);
+    // `seen` still holds the earlier snapshots; clear it so each wait sees only the event for the edit just made.
+    e.seen.clear();
+    e.ok("queue.move", json!({ "from": 2, "to": 1 }));
+    let q = e.notified("queue.changed", |p| p["items"][1]["title"] == "short_a");
+    assert_eq!(titles(&q), ["gap_a", "short_a", "short_b"]);
+    let remove = q["items"][2]["id"].clone();
+    e.seen.clear();
+    e.ok("queue.remove", json!({ "itemIds": [remove] }));
+    let q = e.notified("queue.changed", |p| p["items"].as_array().is_some_and(|i| i.len() == 2));
+    assert_eq!(titles(&q), ["gap_a", "short_a"]);
+    e.ok("queue.setRepeat", json!({ "repeat": "all" }));
+    e.notified("player.state", |p| p["repeat"] == "all");
+    e.ok("queue.setShuffle", json!({ "shuffle": true }));
+    e.notified("player.state", |p| p["shuffle"] == true);
+    e.ok("queue.clear", json!({}));
+    e.notified("queue.changed", |p| p["items"].as_array().is_some_and(|i| i.is_empty()));
+}
+
+#[test]
+fn session_restores_after_restart() {
+    let data = tempfile::tempdir().unwrap();
+    let music = music_dir(&["gap_a.flac", "gap_b.flac", "short_a.flac"]);
+    let (mut e, ids) = scanned_engine(data.path(), music.path()); // gap_a, gap_b, short_a
+    e.ok("queue.set", json!({ "trackIds": ids, "startIndex": 1 }));
+    e.ok("player.play", json!({}));
+    e.notified("player.state", |p| p["status"] == "playing");
+    e.ok("player.pause", json!({}));
+    e.notified("player.state", |p| p["status"] == "paused");
+    e.ok("player.seek", json!({ "ms": 1_200 }));
+    e.notified("player.state", |p| p["status"] == "paused" && p["positionMs"] == 1_200);
+    assert!(e.close().success());
+
+    let mut e = with_library(data.path());
+    e.notified("player.state", |p| p["status"] == "paused"); // the restore's own state event
+    let st = e.ok("player.state", json!({}));
+    assert_eq!(st["status"], "paused");
+    assert_eq!(st["queueIndex"], 1);
+    assert_eq!(st["positionMs"], 1_200);
+    assert_eq!(st["track"]["trackId"], ids[1]);
+    assert_eq!(st["track"]["title"], "gap_b");
+    assert_eq!(e.ok("queue.get", json!({}))["items"].as_array().unwrap().len(), 3);
+    e.ok("player.play", json!({}));
+    let st = e.notified("player.state", |p| p["status"] == "playing");
+    assert!(st["positionMs"].as_u64().unwrap() >= 1_200, "resumes where it left off: {st}");
+}
+
+#[test]
+fn restored_queue_skips_missing_file() {
+    let data = tempfile::tempdir().unwrap();
+    let music = music_dir(&["short_a.flac", "short_b.flac"]);
+    let (mut e, ids) = scanned_engine(data.path(), music.path());
+    e.ok("queue.set", json!({ "trackIds": ids }));
+    assert!(e.close().success());
+    std::fs::remove_file(music.path().join("short_a.flac")).unwrap();
+
+    let mut e = with_library(data.path());
+    e.notified("player.state", |p| p["status"] == "paused");
+    e.ok("player.play", json!({}));
+    let err = e.notified("engine.error", |p| p["name"] == "FILE_MISSING");
+    assert!(err["path"].as_str().unwrap().ends_with("short_a.flac"));
+    let st = e.notified("player.state", |p| p["status"] == "playing");
+    assert_eq!(st["track"]["title"], "short_b");
+}
+
+#[test]
+fn a_finished_track_is_recorded_in_history() {
+    let data = tempfile::tempdir().unwrap();
+    let music = music_dir(&["short_a.flac"]);
+    let (mut e, ids) = scanned_engine(data.path(), music.path());
+    e.ok("queue.set", json!({ "trackIds": ids }));
+    e.ok("player.play", json!({}));
+    e.notified("library.changed", |p| p["scopes"].as_array().unwrap().iter().any(|s| s == "history"));
+    let recent = e.ok("library.recent", json!({ "kind": "played" }));
+    assert_eq!(recent["tracks"][0]["id"], ids[0]);
+    assert_eq!(recent["tracks"][0]["playCount"], 1);
+    assert_eq!(e.ok("library.recent", json!({ "kind": "mostPlayed" }))["tracks"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn playlists_over_rpc_round_trip_through_m3u() {
+    let data = tempfile::tempdir().unwrap();
+    let music = music_dir(&["short_a.flac", "short_b.flac"]);
+    let (mut e, ids) = scanned_engine(data.path(), music.path());
+    let p = e.ok("playlists.create", json!({ "name": "Mix" }));
+    e.notified("library.changed", |p| p["scopes"].as_array().unwrap().iter().any(|s| s == "playlists"));
+    let id = p["id"].clone();
+    e.ok("playlists.addTracks", json!({ "id": id, "trackIds": ids }));
+    e.ok("playlists.reorder", json!({ "id": id, "from": 0, "to": 1 }));
+    let detail = e.ok("playlists.get", json!({ "id": id }));
+    assert_eq!(detail["items"][0]["track"]["title"], "short_b");
+    let out = music.path().join("Mix.m3u8");
+    e.ok("playlists.exportM3u", json!({ "id": id, "path": out }));
+    let imported = e.ok("playlists.importM3u", json!({ "path": out }));
+    assert_eq!(imported["skipped"], 0);
+    assert_eq!(imported["playlist"]["trackCount"], 2);
+    e.ok("playlists.delete", json!({ "id": id }));
+    assert_eq!(e.ok("playlists.list", json!({})).as_array().unwrap().len(), 1, "only the imported playlist remains");
+}
+
+#[test]
+fn watcher_picks_up_new_files_and_remove_folder_forgets_them() {
+    let data = tempfile::tempdir().unwrap();
+    let music = music_dir(&["short_a.flac"]);
+    let (mut e, _) = scanned_engine(data.path(), music.path());
+    e.seen.clear();
+    std::fs::copy(fixture("short_b.flac"), music.path().join("short_b.flac")).unwrap();
+    let done = e.notified("library.scanProgress", |p| p["phase"] == "done" && p["added"] == 1);
+    assert_eq!(done["added"], 1);
+    assert_eq!(e.ok("library.tracks", json!({}))["total"], 2);
+    let folder = e.ok("library.folders", json!({}))[0]["id"].clone();
+    e.ok("library.removeFolder", json!({ "id": folder }));
+    assert_eq!(e.ok("library.tracks", json!({}))["total"], 0);
+    assert!(e.ok("library.folders", json!({})).as_array().unwrap().is_empty());
+}
+
+#[test]
+fn track_detail_includes_probed_gapless_info() {
+    let data = tempfile::tempdir().unwrap();
+    let music = music_dir(&["gap_a.m4a"]);
+    let (mut e, ids) = scanned_engine(data.path(), music.path());
+    let d = e.ok("library.track", json!({ "id": ids[0] }));
+    assert_eq!(d["track"]["codec"], "aac-lc");
+    assert!(d["gapless"]["delay"].as_u64().unwrap() > 0, "{d}");
+    assert!(d["sizeBytes"].as_u64().unwrap() > 0);
+}
+
+#[test]
+fn unicode_folder_paths_work_end_to_end() {
+    let data = tempfile::tempdir().unwrap();
+    let music = tempfile::tempdir().unwrap();
+    let dir = music.path().join("Beyoncé").join("日本語");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::copy(fixture("short_a.flac"), dir.join("♫ song.flac")).unwrap();
+    let (mut e, ids) = scanned_engine(data.path(), music.path());
+    assert_eq!(e.ok("library.search", json!({ "text": "song" }))["tracks"][0]["id"], ids[0]);
+    e.ok("queue.set", json!({ "trackIds": ids }));
+    e.ok("player.play", json!({}));
+    let st = e.notified("player.state", |p| p["status"] == "playing");
+    assert!(st["track"]["path"].as_str().unwrap().contains("日本語"));
+}
