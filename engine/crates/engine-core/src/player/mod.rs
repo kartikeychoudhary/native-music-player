@@ -77,9 +77,15 @@ pub struct PlayerHandle { tx: Sender<Command>, state: Arc<Mutex<PlayerState>>, j
 pub struct Commander(Sender<Command>);
 impl Commander { pub fn send(&self, c: Command) { let _ = self.0.send(c); } }
 
+/// A cloneable view of the latest published player state.
+#[derive(Clone)]
+pub struct StateReader(Arc<Mutex<PlayerState>>);
+impl StateReader { pub fn get(&self) -> PlayerState { self.0.lock().unwrap_or_else(|p| p.into_inner()).clone() } }
+
 impl PlayerHandle {
     pub fn send(&self, c: Command) { let _ = self.tx.send(c); }
     pub fn state(&self) -> PlayerState { self.state.lock().unwrap().clone() }
+    pub fn state_reader(&self) -> StateReader { StateReader(self.state.clone()) }
     pub fn commander(&self) -> Commander { Commander(self.tx.clone()) }
     pub fn shutdown(mut self) {
         let _ = self.tx.send(Command::Shutdown);

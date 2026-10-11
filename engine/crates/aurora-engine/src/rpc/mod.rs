@@ -1,15 +1,18 @@
 mod dispatch;
 mod library_methods;
 mod library_service;
+mod session;
 mod writer;
 
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use engine_core::output::null::{NullBackend, NullMode};
 use engine_core::output::{system::SystemBackend, OutputBackend};
-use engine_core::player::{spawn_player, PlayerConfig, PlayerEvent};
+use engine_core::player::{spawn_player, Command, PlayerConfig, PlayerEvent};
 use protocol::rpc::{Request, RpcError};
 use protocol::{EngineReady, ErrorCode, LibraryScope, QueueChanged, PROTOCOL_VERSION};
 use serde_json::{json, Value};
@@ -76,6 +79,9 @@ pub fn run(opts: RunOptions) -> i32 {
     let (tx, rx) = crossbeam_channel::unbounded::<PlayerEvent>();
     let player = spawn_player(backend.clone(), PlayerConfig::default(), tx);
     let queue = Arc::new(Mutex::new(QueueChanged { items: vec![], current: None }));
+    if let Some(dir) = &opts.data_dir && let Some(r) = session::load(dir).and_then(session::restore) {
+        player.send(Command::Restore(Box::new(r)));
+    }
     let (library, library_error) = match &opts.data_dir {
         Some(dir) => match LibraryService::open(dir, out.clone(), fallback_probe()) {
             Ok(s) => (Some(Arc::new(s)), None),
@@ -111,6 +117,21 @@ pub fn run(opts: RunOptions) -> i32 {
         }
     }).expect("spawn event thread");
 
+    let stop_saver = Arc::new(AtomicBool::new(false));
+    let saver = opts.data_dir.clone().map(|dir| {
+        let (reader, queue, stop) = (player.state_reader(), queue.clone(), stop_saver.clone());
+        std::thread::Builder::new().name("aurora-session".into()).spawn(move || {
+            let mut last: Option<session::Session> = None;
+            while !stop.load(SeqCst) {
+                for _ in 0..50 { if stop.load(SeqCst) { return; } std::thread::sleep(Duration::from_millis(100)); }
+                let snap = session::snapshot(&queue.lock().unwrap_or_else(|p| p.into_inner()), &reader.get());
+                if last.as_ref() != Some(&snap) {
+                    match session::save(&dir, &snap) { Ok(()) => last = Some(snap), Err(e) => tracing::warn!(error = %e, "couldn't save session.json") }
+                }
+            }
+        }).expect("spawn session saver")
+    });
+
     let ctx = Ctx { player, backend, queue, library: library.clone() };
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
@@ -128,6 +149,12 @@ pub fn run(opts: RunOptions) -> i32 {
             Ok(Outcome::Shutdown) => { out.send(&json!({ "jsonrpc": "2.0", "id": id, "result": Value::Null })); break; }
             Err(e) => out.send(&json!({ "jsonrpc": "2.0", "id": id, "error": e })),
         }
+    }
+    stop_saver.store(true, SeqCst);
+    if let Some(j) = saver { let _ = j.join(); }
+    if let Some(dir) = &opts.data_dir {
+        let snap = session::snapshot(&ctx.queue.lock().unwrap_or_else(|p| p.into_inner()), &ctx.player.state());
+        if let Err(e) = session::save(dir, &snap) { tracing::warn!(error = %e, "couldn't save session.json"); }
     }
     if let Some(svc) = &library { svc.shutdown(); }
     ctx.player.shutdown();
