@@ -80,3 +80,30 @@ fn exits_when_stdin_closes() {
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+#[test]
+fn invalid_requests_get_32600_and_null_ids_are_answered() {
+    let mut e = Engine::spawn();
+    let send = |e: &mut Engine, raw: &[u8]| { e.stdin.write_all(raw).unwrap(); e.stdin.write_all(b"\n").unwrap(); e.stdin.flush().unwrap(); };
+    send(&mut e, b"[]");
+    let v = e.wait_for(|v| v["error"]["code"] == -32600);
+    assert_eq!(v["id"], Value::Null);
+    e.seen.clear();
+    send(&mut e, br#"{"jsonrpc":"2.0","id":5}"#);
+    let v = e.wait_for(|v| v["error"]["code"] == -32600);
+    assert_eq!(v["id"], 5);
+    e.seen.clear();
+    send(&mut e, br#"{"jsonrpc":"2.0","id":null,"method":"player.state"}"#);
+    let v = e.wait_for(|v| v.get("result").is_some_and(|r| r["status"] == "stopped"));
+    assert_eq!(v["id"], Value::Null);
+}
+
+#[test]
+fn non_utf8_lines_are_rejected_without_stopping_the_server() {
+    let mut e = Engine::spawn();
+    e.stdin.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"\xff\xfe\"}\n").unwrap();
+    e.stdin.flush().unwrap();
+    let v = e.wait_for(|v| v["error"]["code"] == -32700);
+    assert!(v["error"]["message"].as_str().unwrap().contains("UTF-8"));
+    assert_eq!(e.call("player.state", json!({}))["result"]["status"], "stopped", "still serving");
+}

@@ -73,6 +73,21 @@ fn record_play(svc: &LibraryService, out: &Writer, track_id: Option<i64>, path: 
     }
 }
 
+fn error_response(id: Value, code: i32, message: impl Into<String>) -> Value {
+    json!({ "jsonrpc": "2.0", "id": id, "error": RpcError { code, message: message.into(), data: None } })
+}
+
+/// Parses one request line (see the Task 24 interface): -32700 for bad JSON, -32600 for JSON that
+/// isn't a request. A present `"id": null` is an id; only a missing id makes a notification.
+pub fn parse_line(line: &str) -> Result<(Option<Value>, Request), Value> {
+    let v: Value = serde_json::from_str(line).map_err(|e| error_response(Value::Null, -32700, format!("parse error: {e}")))?;
+    let id = v.as_object().and_then(|o| o.get("id").cloned());
+    let invalid = |msg: String| error_response(id.clone().unwrap_or(Value::Null), -32600, format!("invalid request: {msg}"));
+    let req: Request = serde_json::from_value(v).map_err(|e| invalid(e.to_string()))?;
+    if req.jsonrpc != "2.0" { return Err(invalid("jsonrpc must be \"2.0\"".into())); }
+    Ok((id, req))
+}
+
 pub fn run(opts: RunOptions) -> i32 {
     let out = Arc::new(Writer::new());
     let backend = backend_from_env();
@@ -144,15 +159,21 @@ pub fn run(opts: RunOptions) -> i32 {
     });
 
     let ctx = Ctx { player, backend, queue, library: library.clone() };
-    let stdin = std::io::stdin();
-    for line in stdin.lock().lines() {
-        let Ok(line) = line else { break };
-        if line.trim().is_empty() { continue; }
-        let req: Request = match serde_json::from_str(&line) {
-            Ok(r) => r,
-            Err(e) => { out.send(&json!({ "jsonrpc": "2.0", "id": Value::Null, "error": RpcError { code: -32700, message: format!("parse error: {e}"), data: None } })); continue; }
+    let mut stdin = std::io::stdin().lock();
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match stdin.read_until(b'\n', &mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        let Ok(line) = std::str::from_utf8(&buf) else {
+            out.send(&error_response(Value::Null, -32700, "parse error: request is not valid UTF-8"));
+            continue;
         };
-        let id = req.id.clone();
+        let line = line.trim();
+        if line.is_empty() { continue; }
+        let (id, req) = match parse_line(line) { Ok(p) => p, Err(resp) => { out.send(&resp); continue; } };
         let result = dispatch(&ctx, &req.method, req.params);
         let Some(id) = id else { continue }; // notifications from the client get no response
         match result {
@@ -170,4 +191,22 @@ pub fn run(opts: RunOptions) -> i32 {
     if let Some(svc) = &library { svc.shutdown(); }
     ctx.player.shutdown();
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_line;
+    use serde_json::json;
+
+    #[test]
+    fn classifies_lines() {
+        assert_eq!(parse_line("{nope").unwrap_err()["error"]["code"], -32700);
+        assert_eq!(parse_line("42").unwrap_err()["error"]["code"], -32600);
+        assert_eq!(parse_line(r#"{"jsonrpc":"1.0","id":3,"method":"x"}"#).unwrap_err()["id"], 3);
+        let (id, req) = parse_line(r#"{"jsonrpc":"2.0","id":null,"method":"player.state"}"#).unwrap();
+        assert_eq!(id, Some(json!(null)));
+        assert_eq!(req.method, "player.state");
+        let (id, _) = parse_line(r#"{"jsonrpc":"2.0","method":"player.pause"}"#).unwrap();
+        assert_eq!(id, None, "no id = notification");
+    }
 }
