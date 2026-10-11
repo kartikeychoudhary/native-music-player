@@ -1,3 +1,4 @@
+pub mod card_match;
 pub mod cpal_out;
 pub mod format;
 pub mod null;
