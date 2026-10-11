@@ -77,3 +77,10 @@ fn play_missing_file_exits_1() {
     let out = run_with_timeout(&["play", "--null", "--speed", "20", &fixture("does_not_exist.flac")]);
     assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
 }
+
+#[test]
+fn panics_exit_cleanly_with_code_70() {
+    let out = Command::new(env!("CARGO_BIN_EXE_aurora-engine")).arg("__panic").output().unwrap();
+    assert_eq!(out.status.code(), Some(70));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("test panic"));
+}

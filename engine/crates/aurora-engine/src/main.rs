@@ -1,3 +1,5 @@
+mod rpc;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -16,6 +18,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Run the JSON-RPC server on stdio (default).
+    Rpc,
     /// Print what Aurora sees in a file.
     Probe { file: PathBuf },
     /// List output devices as JSON.
@@ -30,6 +34,9 @@ enum Cmd {
         /// Null-output speed multiplier.
         #[arg(long, default_value_t = 1.0)] speed: f64,
     },
+    /// Panics on purpose; used only by tests of the panic hook.
+    #[command(hide = true, name = "__panic")]
+    Panic,
 }
 
 fn init_logging() {
@@ -42,15 +49,21 @@ fn init_logging() {
 
 fn main() {
     init_logging();
+    // A panic on any thread (including an output callback) is logged with a backtrace and the
+    // process exits, so Electron's supervisor can restart the engine.
+    std::panic::set_hook(Box::new(|info| {
+        let bt = std::backtrace::Backtrace::force_capture();
+        tracing::error!(panic = %info, backtrace = %bt, "engine panic");
+        eprintln!("aurora-engine panic: {info}\n{bt}");
+        std::process::exit(70);
+    }));
     let cli = Cli::parse();
     let code = match cli.cmd {
         Some(Cmd::Probe { file }) => probe(&file),
         Some(Cmd::Devices { null }) => devices(null),
         Some(Cmd::Play { files, bit_perfect, device, null, speed }) => play(files, bit_perfect, device, null, speed),
-        None => {
-            eprintln!("rpc mode arrives in a later task");
-            1
-        }
+        Some(Cmd::Panic) => panic!("test panic"),
+        Some(Cmd::Rpc) | None => rpc::run(),
     };
     std::process::exit(code);
 }
