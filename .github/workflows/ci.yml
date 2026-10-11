@@ -1,0 +1,72 @@
+name: CI
+on:
+  push: { branches: [main] }
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults: { run: { shell: bash } }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: clippy }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: engine }
+      - name: System packages (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang pkg-config libasound2-dev libpipewire-0.3-dev libspa-0.2-dev ffmpeg xvfb
+          # Ubuntu 24.04 runners block unprivileged user namespaces, which Electron's sandbox needs.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: System packages (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake ffmpeg
+      - name: System packages (Windows)
+        if: runner.os == 'Windows'
+        # cmake is already on the Windows runner image; only ffmpeg is missing.
+        run: choco install -y --no-progress ffmpeg
+      - name: Check ffmpeg encoders
+        run: |
+          ffmpeg -hide_banner -encoders > ffmpeg-encoders.txt
+          for enc in libmp3lame libvorbis libopus aac alac flac; do
+            grep -qE "^ [A-Z.]{6} $enc " ffmpeg-encoders.txt || { echo "ffmpeg is missing encoder: $enc"; exit 1; }
+          done
+          rm ffmpeg-encoders.txt
+      - uses: actions/cache@v4
+        with:
+          path: fixtures/out
+          key: fixtures-${{ runner.os }}-${{ hashFiles('fixtures/generate.sh', 'engine/crates/fixtures-gen/src/**', 'engine/crates/engine-core/src/decode/dsd/modulator.rs') }}
+      - name: Fixtures
+        run: '[ -f fixtures/out/dsd64.dff ] || bash fixtures/generate.sh'
+      - name: Engine tests
+        run: cargo test --manifest-path engine/Cargo.toml --workspace
+      - name: Engine tests without fdk-aac
+        run: cargo test --manifest-path engine/Cargo.toml -p engine-core --no-default-features --test open
+      # Clippy runs on every OS: coreaudio_hog.rs, alsa_hw.rs and the PipeWire probe are cfg-gated per platform.
+      - name: Clippy
+        run: cargo clippy --manifest-path engine/Cargo.toml --workspace --all-targets -- -D warnings
+      - name: Generated protocol types are committed
+        run: git diff --exit-code -- shared/protocol
+      - uses: actions/setup-node@v5
+        with: { node-version: 24, cache: npm, cache-dependency-path: app/package-lock.json }
+      - run: npm ci --prefix app
+      - run: npm --prefix app run typecheck
+      - run: npm --prefix app test
+      - name: Build engine for e2e
+        run: cargo build --manifest-path engine/Cargo.toml -p aurora-engine
+      - name: E2E (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm --prefix app run e2e
+      - name: E2E (Windows/macOS)
+        if: runner.os != 'Linux'
+        run: npm --prefix app run e2e
