@@ -3,10 +3,12 @@ pub mod artwork;
 pub mod codec;
 pub mod db;
 pub mod error;
+pub mod history;
 pub mod palette;
 pub mod query;
 mod rows;
 pub mod scan;
+pub mod search;
 pub mod tags;
 
 use std::path::{Path, PathBuf};
