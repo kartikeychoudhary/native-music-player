@@ -13,7 +13,11 @@ thiserror.workspace = true
 tracing.workspace = true
 rusqlite.workspace = true
 lofty.workspace = true
+image.workspace = true
+webp.workspace = true
+blake3.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
 lofty.workspace = true
+image.workspace = true

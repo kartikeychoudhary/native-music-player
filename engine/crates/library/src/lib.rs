@@ -2,6 +2,7 @@
 pub mod artwork;
 pub mod db;
 pub mod error;
+pub mod palette;
 pub mod tags;
 
 use std::path::{Path, PathBuf};

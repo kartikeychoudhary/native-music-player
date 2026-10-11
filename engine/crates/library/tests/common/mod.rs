@@ -47,3 +47,11 @@ pub fn tagged(src: &str, dest: &Path, t: &Tags) -> PathBuf {
     tag.save_to_path(dest, WriteOptions::default()).unwrap();
     dest.to_path_buf()
 }
+
+/// A solid-colour PNG of `w`×`h`.
+pub fn png(w: u32, h: u32, rgb: [u8; 3]) -> Vec<u8> {
+    let img = image::RgbImage::from_pixel(w, h, image::Rgb(rgb));
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(img).write_to(&mut out, image::ImageFormat::Png).unwrap();
+    out.into_inner()
+}
