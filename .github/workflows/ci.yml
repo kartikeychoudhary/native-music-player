@@ -48,6 +48,8 @@ jobs:
           key: fixtures-${{ runner.os }}-${{ hashFiles('fixtures/generate.sh', 'engine/crates/fixtures-gen/src/**', 'engine/crates/engine-core/src/decode/dsd/modulator.rs') }}
       - name: Fixtures
         run: '[ -f fixtures/out/dsd64.dff ] || bash fixtures/generate.sh'
+      - name: Remove generated protocol types so the tests regenerate every one
+        run: find shared/protocol -name '*.ts' -delete
       - name: Engine tests
         run: cargo test --manifest-path engine/Cargo.toml --workspace
       - name: Engine tests without fdk-aac
@@ -55,8 +57,16 @@ jobs:
       # Clippy runs on every OS: coreaudio_hog.rs, alsa_hw.rs and the PipeWire probe are cfg-gated per platform.
       - name: Clippy
         run: cargo clippy --manifest-path engine/Cargo.toml --workspace --all-targets -- -D warnings
+      # Catches modified, deleted (stale/orphaned after regeneration) and untracked (never git-added) files.
       - name: Generated protocol types are committed
-        run: git diff --exit-code -- shared/protocol
+        run: |
+          status=$(git status --porcelain --untracked-files=all -- shared/protocol)
+          if [ -n "$status" ]; then
+            echo "shared/protocol is out of date; regenerate with the engine tests and commit:"
+            echo "$status"
+            git diff -- shared/protocol
+            exit 1
+          fi
       - uses: actions/setup-node@v5
         with: { node-version: 24, cache: npm, cache-dependency-path: app/package-lock.json }
       - run: npm ci --prefix app
