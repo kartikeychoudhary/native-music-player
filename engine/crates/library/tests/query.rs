@@ -130,6 +130,19 @@ fn artist_and_genre_lists() {
 }
 
 #[test]
+fn artist_genre_filter_ignores_missing_tracks() {
+    let s = scanned(demo_tree);
+    let rock: i64 = s.lib.conn().query_row("SELECT id FROM genres WHERE name = 'Rock'", [], |r| r.get(0)).unwrap();
+    let by_rock = || q(None, false, 0, 10, ListFilter { genre_id: Some(rock), ..Default::default() });
+    assert_eq!(titles(&s.lib.artists(&by_rock()).unwrap().items, |a| &a.name), ["Alpha"]);
+    // Alpha stays visible through its other tracks, but its only Rock track (Peak) goes missing.
+    std::fs::remove_file(s.root().join("Alpha/Zenith/01.flac")).unwrap();
+    s.rescan();
+    assert_eq!(s.lib.artists(&ListQuery::default()).unwrap().total, 3);
+    assert_eq!(s.lib.artists(&by_rock()).unwrap().total, 0);
+}
+
+#[test]
 fn oversized_limits_are_clamped_not_errors() {
     let s = scanned(demo_tree);
     assert_eq!(s.lib.tracks(&ListQuery { limit: Some(50_000), ..Default::default() }).unwrap().items.len(), 6);

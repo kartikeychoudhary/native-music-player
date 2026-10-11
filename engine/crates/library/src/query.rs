@@ -101,7 +101,11 @@ impl Library {
         let mut w = Filter::new("(ar.track_count > 0 OR ar.album_count > 0)");
         if let Some(t) = text_of(&f) { w.add("ar.name LIKE ? ESCAPE '\\'", [like(t)]); }
         if let Some(id) = f.genre_id {
-            w.add("EXISTS (SELECT 1 FROM track_artists ta JOIN track_genres tg ON tg.track_id = ta.track_id WHERE ta.artist_id = ar.id AND tg.genre_id = ?)", [Value::Integer(id)]);
+            w.add(
+                "EXISTS (SELECT 1 FROM track_artists ta JOIN track_genres tg ON tg.track_id = ta.track_id JOIN tracks t ON t.id = ta.track_id
+                         WHERE ta.artist_id = ar.id AND tg.genre_id = ? AND t.missing_since IS NULL)",
+                [Value::Integer(id)],
+            );
         }
         let d = dir(q);
         let order = match q.sort {
