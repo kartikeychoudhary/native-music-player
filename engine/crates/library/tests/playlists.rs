@@ -41,8 +41,22 @@ fn add_insert_reorder_remove_keep_positions_dense() {
     assert_eq!(positions, [0, 1, 2]);
     assert!(matches!(s.lib.reorder_playlist(p.id, 0, 9), Err(LibError::InvalidArgument(_))));
     assert!(matches!(s.lib.add_to_playlist(p.id, &[999_999], None), Err(LibError::NotFound(_))));
-    let dup = s.lib.add_to_playlist(p.id, &[s.id_of("Span")], Some(99)).unwrap();
-    assert_eq!(dup.track_count, 4, "duplicates allowed; index past the end appends");
+    let more = s.lib.add_to_playlist(p.id, &[s.id_of("Noon")], Some(99)).unwrap();
+    assert_eq!(more.track_count, 4, "index past the end appends");
+    assert_eq!(titles(&s.lib.playlist(p.id).unwrap()), ["Span", "Peak", "Dawn", "Noon"]);
+}
+
+#[test]
+fn a_track_is_in_a_playlist_at_most_once() {
+    let s = scanned(demo_tree);
+    let p = s.lib.create_playlist("Mix").unwrap();
+    let (dawn, noon) = (s.id_of("Dawn"), s.id_of("Noon"));
+    s.lib.add_to_playlist(p.id, &[dawn], None).unwrap();
+    let summary = s.lib.add_to_playlist(p.id, &[dawn, noon, noon], None).unwrap();
+    assert_eq!(summary.track_count, 2, "Dawn is already there; Noon is added once");
+    assert_eq!(titles(&s.lib.playlist(p.id).unwrap()), ["Dawn", "Noon"]);
+    assert_eq!(s.lib.add_to_playlist(p.id, &[noon], Some(0)).unwrap().track_count, 2);
+    assert_eq!(titles(&s.lib.playlist(p.id).unwrap()), ["Dawn", "Noon"], "re-adding doesn't move it");
 }
 
 #[test]

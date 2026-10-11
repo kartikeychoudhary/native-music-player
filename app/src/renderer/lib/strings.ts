@@ -30,6 +30,7 @@ export const S = Object.freeze({
   queuedNext: (n: number) => (n === 1 ? 'Playing next' : `${n} tracks playing next`),
   queuedLast: (n: number) => (n === 1 ? 'Added to queue' : `${n} tracks added to queue`),
   addedToPlaylist: (name: string) => `Added to ${name}`,
+  alreadyInPlaylist: (name: string) => `Already in ${name}`,
   homeTitle: 'Home',
   emptyLibrary: 'Your library is empty',
   emptyLibraryHint: 'Add the folders where your music lives. Aurora watches them and keeps the library up to date.',

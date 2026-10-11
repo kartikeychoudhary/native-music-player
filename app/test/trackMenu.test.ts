@@ -50,4 +50,13 @@ describe('trackMenu', () => {
     await vi.waitFor(() => expect(toasts()).toContain('nope'))
     expect(toasts()).not.toContain('Added to Mix')
   })
+
+  it('says so when the tracks were already in the playlist', async () => {
+    useLibrary.setState({ playlists: [{ id: 9, name: 'Mix', trackCount: 1, durationMs: 0, updatedAt: 0 }] })
+    const { api } = fakeApi({ 'playlists.addTracks': () => ({ id: 9, name: 'Mix', trackCount: 1, durationMs: 0, updatedAt: 0 }) })
+    usePlayer.setState({ api }); useLibrary.setState({ api })
+    trackMenu([track(1, 'Dawn')], vi.fn())[2].items![1].onSelect!()
+    await vi.waitFor(() => expect(useUi.getState().toasts.map((t) => t.text)).toContain('Already in Mix'))
+    expect(useUi.getState().toasts.map((t) => t.text)).not.toContain('Added to Mix')
+  })
 })

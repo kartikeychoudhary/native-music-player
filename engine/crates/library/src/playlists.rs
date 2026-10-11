@@ -145,8 +145,10 @@ impl Library {
             if !known {
                 return Err(LibError::NotFound(format!("track {t}")));
             }
-            tx.execute("INSERT INTO playlist_items(playlist_id, track_id, position) VALUES (?1, ?2, 0)", params![id, t])?;
-            added.push(tx.last_insert_rowid());
+            // A track is in a playlist at most once: one already there (or earlier in this call) is skipped.
+            if tx.execute("INSERT OR IGNORE INTO playlist_items(playlist_id, track_id, position) VALUES (?1, ?2, 0)", params![id, t])? == 1 {
+                added.push(tx.last_insert_rowid());
+            }
         }
         let at = index.map_or(items.len(), |i| (i as usize).min(items.len()));
         items.splice(at..at, added);

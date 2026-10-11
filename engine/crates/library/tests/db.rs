@@ -142,3 +142,27 @@ fn folder_mirror_follows_add_and_remove() {
     lib.remove_folder(f.id).unwrap();
     assert!(db::read_folder_mirror(data.path()).is_empty());
 }
+
+#[test]
+fn upgrading_removes_duplicate_playlist_entries() {
+    let (data, music) = dirs();
+    {
+        let (lib, _) = Library::open(data.path()).unwrap();
+        let f = lib.add_folder(music.path()).unwrap();
+        let conn = lib.conn();
+        conn.execute("INSERT INTO artists(name, sort_name) VALUES ('A', 'a')", []).unwrap();
+        conn.execute("INSERT INTO albums(title, artist_id, group_key, added_at) VALUES ('Al', 1, 'k', 0)", []).unwrap();
+        let t = seed_track(&conn, f.id, "/m/a.flac", 1, None);
+        let u = seed_track(&conn, f.id, "/m/b.flac", 1, None);
+        conn.execute("INSERT INTO playlists(name, created_at, updated_at) VALUES ('p', 0, 0)", []).unwrap();
+        // A database from before the uniqueness rule, holding a duplicate.
+        conn.execute_batch("DROP INDEX playlist_items_unique; PRAGMA user_version = 2;").unwrap();
+        for (track, pos) in [(t, 0), (u, 1), (t, 2)] {
+            conn.execute("INSERT INTO playlist_items(playlist_id, track_id, position) VALUES (1, ?1, ?2)", [track, pos]).unwrap();
+        }
+    }
+    let (lib, _) = Library::open(data.path()).unwrap();
+    let d = lib.playlist(1).unwrap();
+    assert_eq!(d.playlist.track_count, 2);
+    assert_eq!(d.items.iter().map(|i| i.track.path.as_str()).collect::<Vec<_>>(), ["/m/a.flac", "/m/b.flac"], "the first copy stays");
+}

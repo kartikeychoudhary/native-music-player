@@ -12,12 +12,15 @@ async function newPlaylistWith(trackIds: () => Promise<number[]>) {
   const lib = useLibrary.getState()
   const p = await lib.createPlaylist(name)
   if (!p) return
-  await addAndToast(p.id, p.name, trackIds)
+  await addAndToast(p.id, p.name, trackIds, p.trackCount)
 }
 
-async function addAndToast(id: number, name: string, trackIds: () => Promise<number[]>) {
+/** A track is in a playlist at most once (the engine skips ones already there), so an unchanged count means nothing was added. */
+async function addAndToast(id: number, name: string, trackIds: () => Promise<number[]>, before = useLibrary.getState().playlists.find((p) => p.id === id)?.trackCount) {
   const ids = await trackIds()
-  if (ids.length && (await useLibrary.getState().addToPlaylist(id, ids))) useUi.getState().toast('info', S.addedToPlaylist(name))
+  if (!ids.length) return
+  const after = await useLibrary.getState().addToPlaylist(id, ids)
+  if (after) useUi.getState().toast('info', after.trackCount === before ? S.alreadyInPlaylist(name) : S.addedToPlaylist(name))
 }
 
 /** "Add to playlist ▸" for tracks resolved lazily (an album menu fetches its tracks only when used). */

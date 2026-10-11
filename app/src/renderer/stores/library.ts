@@ -23,7 +23,8 @@ export interface LibraryStore {
   rescan(id?: number): Promise<void>
   createPlaylist(name: string): Promise<Playlist | null>
   /** Resolves true when the tracks were added; a failure is toasted here and resolves false. */
-  addToPlaylist(playlistId: number, trackIds: number[]): Promise<boolean>
+  /** The playlist after the add, or null when it failed (the error is toasted). */
+  addToPlaylist(playlistId: number, trackIds: number[]): Promise<Playlist | null>
 }
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
@@ -83,8 +84,8 @@ export const useLibrary = create<LibraryStore>()((set, get) => {
     },
     async addToPlaylist(playlistId, trackIds) {
       const api = get().api
-      if (!api) return false
-      try { await api.call('playlists.addTracks', { id: playlistId, trackIds }); return true } catch (e) { useUi.getState().toast('error', message(e)); return false }
+      if (!api) return null
+      try { return await api.call('playlists.addTracks', { id: playlistId, trackIds }) } catch (e) { useUi.getState().toast('error', message(e)); return null }
     },
   }
 })
