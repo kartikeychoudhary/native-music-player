@@ -1,4 +1,5 @@
 import { livePosition, type PlayerStore } from '../stores/player'
+import { S } from './strings'
 
 // Controls that own their own keyboard behaviour; global shortcuts must not steal keys from them.
 const INTERACTIVE = 'button, [role=switch], [role=slider], [role=grid], [role=listbox], [role=menu], [role=dialog], a, input, select, textarea, [contenteditable="true"]'
@@ -6,14 +7,7 @@ const SEEK_STEP_MS = 5000
 const VOLUME_STEP = 0.05
 
 /** Listed in Settings (spec §5.6). M3 adds Ctrl/Cmd+L (lyrics) and Ctrl/Cmd+M (mini-player). */
-export const SHORTCUTS: { keys: string; action: string }[] = [
-  { keys: 'Space', action: 'Play / pause' },
-  { keys: '← / →', action: 'Seek back / forward 5 s' },
-  { keys: 'Shift + ← / →', action: 'Previous / next track' },
-  { keys: '↑ / ↓', action: 'Volume up / down' },
-  { keys: 'Ctrl/Cmd + F', action: 'Search' },
-  { keys: 'Ctrl/Cmd + ,', action: 'Settings' },
-]
+export const SHORTCUTS: { keys: string; action: string }[] = S.shortcutList
 
 /** Applies a global shortcut. Returns true when the event was handled. `go` navigates (Layout passes it). */
 export function handleShortcut(e: KeyboardEvent, store: PlayerStore, now: number, go?: (path: string) => void): boolean {

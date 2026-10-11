@@ -24,8 +24,7 @@ const artistRoute = createRoute({ getParentRoute: () => rootRoute, path: '/artis
 const genresRoute = createRoute({ getParentRoute: () => rootRoute, path: '/genres', component: GenresView })
 const genreRoute = createRoute({ getParentRoute: () => rootRoute, path: '/genres/$genreId', component: GenreView })
 const signalRoute = createRoute({ getParentRoute: () => rootRoute, path: '/signal', component: SignalView })
-
-const searchRoute = createRoute({ getParentRoute: () => rootRoute, path: '/search', component: SearchView })
+const searchRoute = createRoute({ getParentRoute: () => rootRoute, path: '/search', component: SearchView })
 const playlistsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/playlists', component: PlaylistsView })
 const playlistRoute = createRoute({ getParentRoute: () => rootRoute, path: '/playlists/$playlistId', component: PlaylistView })
 const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/settings', component: SettingsView })

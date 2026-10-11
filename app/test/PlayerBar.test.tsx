@@ -68,3 +68,24 @@ describe('PlayerBar (M2)', () => {
     expect(screen.getByRole('slider', { name: 'Seek' }).getAttribute('aria-valuetext')).toBe('1:05 of 4:12')
   })
 })
+
+describe('PlayerBar queue toggle', () => {
+  it('goes home when /queue is the only history entry, and reflects aria-pressed', async () => {
+    const { router } = await renderAt('/queue')
+    const queue = screen.getByRole('button', { name: 'Queue' })
+    expect(queue.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(queue)
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe('/'))
+    expect(screen.getByRole('button', { name: 'Queue' }).getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('opens the queue from elsewhere and goes back on the second click', async () => {
+    const { router } = await renderAt('/')
+    fireEvent.click(screen.getByRole('button', { name: 'Queue' }))
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe('/queue'))
+    expect(screen.getByRole('button', { name: 'Queue' }).getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: 'Queue' }))
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe('/'))
+    expect(screen.getByRole('button', { name: 'Queue' }).getAttribute('aria-pressed')).toBe('false')
+  })
+})

@@ -44,7 +44,7 @@ export function PlayerBar() {
       </div>
       <div className={s.right}>
         <FormatBadges signal={signal} />
-        <button className={s.icon} aria-label="Queue" aria-pressed={onQueue} onClick={() => (onQueue ? router.history.back() : void navigate({ to: '/queue' }))}><ListMusic size={16} /></button>
+        <button className={s.icon} aria-label="Queue" aria-pressed={onQueue} onClick={() => (onQueue ? (router.history.canGoBack() ? router.history.back() : void navigate({ to: '/' })) : void navigate({ to: '/queue' }))}><ListMusic size={16} /></button>
         <DevicePicker />
         <button
           role="switch" aria-checked={bitPerfect} aria-label="Bit-perfect" className={s.switch}
