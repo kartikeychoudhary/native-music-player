@@ -3,6 +3,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { usePaged } from '../src/renderer/lib/usePaged'
+import { useLibrary } from '../src/renderer/stores/library'
 import { usePlayer } from '../src/renderer/stores/player'
 import { fakeApi, resetStores } from './helpers'
 
@@ -29,5 +30,25 @@ describe('usePaged', () => {
     expect(hook.row(449)).toBe(449)
     await act(async () => { await hook.onRange(0, 420) })
     expect(fetchPage).toHaveBeenCalledTimes(3)
+  })
+
+  it('re-requests the scrolled range after a library change and keeps old rows visible meanwhile', async () => {
+    const page = (offset: number, limit: number) => ({ items: Array.from({ length: Math.min(limit, 450 - offset) }, (_, i) => offset + i), total: 450 })
+    const fetchPage = vi.fn(async (_a: unknown, offset: number, limit: number) => page(offset, limit))
+    render(<Probe fetchPage={fetchPage} />)
+    await screen.findByText('450')
+    await act(async () => { await hook.onRange(250, 420) })
+    expect(hook.row(449)).toBe(449)
+
+    fetchPage.mockClear()
+    const releases: (() => void)[] = []
+    fetchPage.mockImplementation((_a: unknown, offset: number, limit: number) => new Promise((resolve) => { releases.push(() => resolve(page(offset, limit))) }))
+    act(() => useLibrary.setState({ versions: { ...useLibrary.getState().versions, tracks: 1 } }))
+
+    expect(fetchPage.mock.calls.map((c) => c[1]).sort()).toEqual([0, 200, 400])
+    expect(hook.row(449)).toBe(449)
+    await act(async () => { releases.forEach((r) => r()) })
+    expect(hook.row(449)).toBe(449)
+    expect(hook.row(300)).toBe(300)
   })
 })

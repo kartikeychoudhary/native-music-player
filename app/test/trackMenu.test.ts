@@ -33,4 +33,21 @@ describe('trackMenu', () => {
     useUi.getState().prompt!.resolve('Road trip')
     await vi.waitFor(() => expect(calls).toContainEqual(['playlists.addTracks', { id: 3, trackIds: [1, 2] }]))
   })
+
+  it('announces success only when the playlist add worked', async () => {
+    useLibrary.setState({ playlists: [{ id: 9, name: 'Mix', trackCount: 0, durationMs: 0, updatedAt: 0 }] })
+    const toasts = () => useUi.getState().toasts.map((t) => t.text)
+
+    const ok = fakeApi({ 'playlists.addTracks': () => ({ id: 9, name: 'Mix', trackCount: 1, durationMs: 0, updatedAt: 0 }) })
+    usePlayer.setState({ api: ok.api }); useLibrary.setState({ api: ok.api })
+    trackMenu([track(1, 'Dawn')], vi.fn())[2].items![1].onSelect!()
+    await vi.waitFor(() => expect(toasts()).toContain('Added to Mix'))
+
+    useUi.setState({ toasts: [] })
+    const bad = fakeApi({ 'playlists.addTracks': () => { throw new Error('nope') } })
+    usePlayer.setState({ api: bad.api }); useLibrary.setState({ api: bad.api })
+    trackMenu([track(1, 'Dawn')], vi.fn())[2].items![1].onSelect!()
+    await vi.waitFor(() => expect(toasts()).toContain('nope'))
+    expect(toasts()).not.toContain('Added to Mix')
+  })
 })

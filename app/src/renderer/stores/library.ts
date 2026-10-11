@@ -19,7 +19,8 @@ export interface LibraryStore {
   removeFolder(id: number): Promise<void>
   rescan(id?: number): Promise<void>
   createPlaylist(name: string): Promise<Playlist | null>
-  addToPlaylist(playlistId: number, trackIds: number[]): Promise<void>
+  /** Resolves true when the tracks were added; a failure is toasted here and resolves false. */
+  addToPlaylist(playlistId: number, trackIds: number[]): Promise<boolean>
 }
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
@@ -71,6 +72,10 @@ export const useLibrary = create<LibraryStore>()((set, get) => {
       if (p) await get().refreshPlaylists()
       return p
     },
-    async addToPlaylist(playlistId, trackIds) { await run((a) => a.call('playlists.addTracks', { id: playlistId, trackIds })) },
+    async addToPlaylist(playlistId, trackIds) {
+      const api = get().api
+      if (!api) return false
+      try { await api.call('playlists.addTracks', { id: playlistId, trackIds }); return true } catch (e) { useUi.getState().toast('error', message(e)); return false }
+    },
   }
 })

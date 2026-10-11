@@ -12,8 +12,12 @@ async function newPlaylistWith(trackIds: () => Promise<number[]>) {
   const lib = useLibrary.getState()
   const p = await lib.createPlaylist(name)
   if (!p) return
-  await lib.addToPlaylist(p.id, await trackIds())
-  useUi.getState().toast('info', S.addedToPlaylist(p.name))
+  await addAndToast(p.id, p.name, trackIds)
+}
+
+async function addAndToast(id: number, name: string, trackIds: () => Promise<number[]>) {
+  const ids = await trackIds()
+  if (ids.length && (await useLibrary.getState().addToPlaylist(id, ids))) useUi.getState().toast('info', S.addedToPlaylist(name))
 }
 
 /** "Add to playlist ▸" for tracks resolved lazily (an album menu fetches its tracks only when used). */
@@ -25,10 +29,7 @@ export function playlistSubmenu(trackIds: () => Promise<number[]>): MenuItem {
       { label: S.newPlaylist, onSelect: () => void newPlaylistWith(trackIds) },
       ...playlists.map((p) => ({
         label: p.name,
-        onSelect: () => void (async () => {
-          await useLibrary.getState().addToPlaylist(p.id, await trackIds())
-          useUi.getState().toast('info', S.addedToPlaylist(p.name))
-        })(),
+        onSelect: () => void addAndToast(p.id, p.name, trackIds),
       })),
     ],
   }
@@ -51,16 +52,26 @@ export function trackMenu(tracks: TrackRow[], go: (path: string) => void, extra:
   ]
 }
 
-async function albumTrackIds(id: number): Promise<number[]> {
+/** An album's track ids; an engine failure becomes an error toast and an empty list. */
+export async function albumTrackIds(id: number): Promise<number[]> {
   const api = usePlayer.getState().api
   if (!api) return []
-  return (await api.call('library.album', { id })).tracks.map((t) => t.id)
+  try {
+    return (await api.call('library.album', { id })).tracks.map((t) => t.id)
+  } catch (e) {
+    useUi.getState().toast('error', e instanceof Error ? e.message : String(e))
+    return []
+  }
+}
+
+export async function playAlbum(id: number): Promise<void> {
+  await usePlayer.getState().playTracks(await albumTrackIds(id))
 }
 
 export function albumMenu(album: AlbumRow, go: (path: string) => void): MenuItem[] {
   const player = usePlayer.getState()
   return [
-    { label: S.play, icon: Play, onSelect: () => void albumTrackIds(album.id).then((ids) => player.playTracks(ids)) },
+    { label: S.play, icon: Play, onSelect: () => void playAlbum(album.id) },
     { label: S.playNext, icon: ListStart, onSelect: () => void albumTrackIds(album.id).then((ids) => player.playNext(ids)) },
     { label: S.addToQueue, icon: ListEnd, onSelect: () => void albumTrackIds(album.id).then((ids) => player.addToQueue(ids)) },
     playlistSubmenu(() => albumTrackIds(album.id)),

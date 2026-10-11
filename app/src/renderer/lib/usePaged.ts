@@ -16,7 +16,11 @@ export function usePaged<T>(key: unknown[], fetchPage: (api: AuroraApi, offset: 
   const [loading, setLoading] = useState(true)
   const [, bump] = useState(0)
   const rows = useRef(new Map<number, T>())
+  // Rows of the previous generation stay visible (as a fallback for `row`) until the replacing pages land.
+  const stale = useRef(new Map<number, T>())
   const requested = useRef(new Set<number>())
+  const pending = useRef(0)
+  const lastRange = useRef<[number, number]>([0, 0])
   const generation = useRef(0)
   const fetchRef = useRef(fetchPage)
   fetchRef.current = fetchPage
@@ -25,30 +29,42 @@ export function usePaged<T>(key: unknown[], fetchPage: (api: AuroraApi, offset: 
   const load = useCallback((page: number) => {
     if (!api || requested.current.has(page)) return Promise.resolve()
     requested.current.add(page)
+    pending.current++
     const gen = generation.current
     return fetchRef.current(api, page * PAGE, PAGE).then((p) => {
       if (gen !== generation.current) return
       p.items.forEach((item, i) => rows.current.set(page * PAGE + i, item))
       setTotal(p.total)
       setLoading(false)
+      if (--pending.current === 0) stale.current = new Map()
       bump((n) => n + 1)
-    }, () => { requested.current.delete(page); setLoading(false) })
+    }, () => {
+      if (gen !== generation.current) return
+      pending.current--
+      requested.current.delete(page)
+      setLoading(false)
+    })
   }, [api])
 
-  useEffect(() => {
-    if (!api || !ready) return
-    generation.current++
-    rows.current = new Map()
-    requested.current = new Set()
-    setLoading(true)
-    void load(0)
-  }, [api, ready, version, keyStr, load])
-
   const onRange = useCallback((start: number, end: number) => {
+    lastRange.current = [start, end]
     const pages = []
     for (let p = Math.floor(start / PAGE); p <= Math.floor(Math.max(start, end) / PAGE); p++) pages.push(load(p))
     return Promise.all(pages).then(() => {})
   }, [load])
 
-  return { total, row: (i: number) => rows.current.get(i), onRange, loading }
+  useEffect(() => {
+    if (!api || !ready) return
+    generation.current++
+    stale.current = new Map([...stale.current, ...rows.current])
+    rows.current = new Map()
+    requested.current = new Set()
+    pending.current = 0
+    setLoading(true)
+    void load(0)
+    // The list only re-requests when its visible range changes, so re-issue the last one for the new generation.
+    void onRange(...lastRange.current)
+  }, [api, ready, version, keyStr, load, onRange])
+
+  return { total, row: (i: number) => rows.current.get(i) ?? stale.current.get(i), onRange, loading }
 }

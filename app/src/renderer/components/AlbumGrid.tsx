@@ -5,10 +5,9 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { albumFormat } from '../lib/format'
 import { S } from '../lib/strings'
 import { useGo } from '../lib/useGo'
-import { usePlayer } from '../stores/player'
 import { useUi } from '../stores/ui'
 import { Artwork } from './Artwork'
-import { albumMenu } from './trackMenu'
+import { albumMenu, playAlbum } from './trackMenu'
 import s from './AlbumGrid.module.css'
 
 const CARD = 180
@@ -17,19 +16,12 @@ const ROW_H = CARD + 76
 
 export function AlbumCard({ a }: { a: AlbumRow }) {
   const go = useGo()
-  const play = async (e: React.MouseEvent) => {
-    e.stopPropagation()
-    const api = usePlayer.getState().api
-    if (!api) return
-    const d = await api.call('library.album', { id: a.id })
-    await usePlayer.getState().playTracks(d.tracks.map((t) => t.id))
-  }
   return (
     <div className={s.card} role="listitem" onClick={() => go(`/albums/${a.id}`)}
       onContextMenu={(e) => { e.preventDefault(); useUi.getState().openMenu(e.clientX, e.clientY, albumMenu(a, go)) }}>
       <div className={s.cover}>
         <Artwork id={a.artworkId} size={300} px={CARD} alt="" />
-        <button className={s.play} aria-label={`${S.play} ${a.title || S.unknownAlbum}`} onClick={(e) => void play(e)}><Play size={16} fill="currentColor" /></button>
+        <button className={s.play} aria-label={`${S.play} ${a.title || S.unknownAlbum}`} onClick={(e) => { e.stopPropagation(); void playAlbum(a.id) }}><Play size={16} fill="currentColor" /></button>
       </div>
       <a href={`#/albums/${a.id}`} className={s.title} onClick={(e) => { e.preventDefault(); go(`/albums/${a.id}`) }} style={{ color: 'inherit', textDecoration: 'none' }}>{a.title || S.unknownAlbum}</a>
       <div className={s.sub}>{a.artist || S.unknownArtist}{a.year ? ` · ${a.year}` : ''}</div>
@@ -42,7 +34,7 @@ export interface VirtualGridProps<T> {
   label: string
   count: number
   row: (i: number) => T | undefined
-  onRange?: (start: number, end: number) => void
+  onRange?: (start: number, end: number) => void | Promise<void>
   render: (item: T) => React.ReactNode
   keyOf: (item: T) => React.Key
   /** Card height in px, excluding the gap. */
@@ -73,7 +65,7 @@ export function VirtualGrid<T>({ label, count, row, onRange, render, keyOf, heig
   return (
     <div ref={ref} className={s.grid} role="list" aria-label={label} style={{ height: v.getTotalSize() }}>
       {vis.map((r) => (
-        <div key={r.key} className={s.row} style={{ transform: `translateY(${r.start - v.options.scrollMargin}px)`, gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
+        <div key={r.key} className={s.row} style={{ transform: `translateY(${r.start - v.options.scrollMargin}px)`, gridTemplateColumns: `repeat(${cols}, ${CARD}px)`, justifyContent: 'start' }}>
           {Array.from({ length: cols }, (_, c) => {
             const i = r.index * cols + c
             if (i >= count) return null

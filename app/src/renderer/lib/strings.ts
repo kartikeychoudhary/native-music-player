@@ -26,6 +26,7 @@ export const S = Object.freeze({
   trackInfo: 'Track info',
   play: 'Play',
   shuffle: 'Shuffle',
+  rowsNotLoaded: 'Could not load the selected tracks',
   queuedNext: (n: number) => (n === 1 ? 'Playing next' : `${n} tracks playing next`),
   queuedLast: (n: number) => (n === 1 ? 'Added to queue' : `${n} tracks added to queue`),
   addedToPlaylist: (name: string) => `Added to ${name}`,

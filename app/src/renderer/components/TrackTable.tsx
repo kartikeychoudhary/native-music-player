@@ -17,7 +17,7 @@ export interface TrackTableProps {
   label: string
   count: number
   row: (i: number) => TrackRow | undefined
-  onRange?: (start: number, end: number) => void
+  onRange?: (start: number, end: number) => void | Promise<void>
   columns?: Column[]
   onPlay: (index: number) => void
   extraMenu?: (rows: TrackRow[]) => MenuItem[]
@@ -69,11 +69,14 @@ export function TrackTable({ label, count, row, onRange, columns = ['index', 'ti
     else setSelected(new Set([i]))
   }
 
-  const openMenu = (i: number, x: number, y: number) => {
+  const openMenu = async (i: number, x: number, y: number) => {
     const indices = selected.has(i) ? [...selected].sort((a, b) => a - b) : [i]
     if (!selected.has(i)) select(i, {})
+    // A long Shift/End selection can span pages that were never scrolled into view: load them before acting on it.
+    if (indices.some((k) => !row(k))) await onRange?.(indices[0], indices[indices.length - 1])
     const rows = indices.map(row).filter((r): r is TrackRow => !!r)
-    if (rows.length) useUi.getState().openMenu(x, y, trackMenu(rows, go, extraMenu?.(rows)))
+    if (rows.length !== indices.length) { useUi.getState().toast('error', S.rowsNotLoaded); return }
+    useUi.getState().openMenu(x, y, trackMenu(rows, go, extraMenu?.(rows)))
   }
 
   const onKey = (e: React.KeyboardEvent) => {
@@ -87,7 +90,7 @@ export function TrackTable({ label, count, row, onRange, columns = ['index', 'ti
     else if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) {
       e.preventDefault()
       const r = (ref.current?.querySelector(`[data-index="${focus}"]`) as HTMLElement | null)?.getBoundingClientRect()
-      openMenu(focus, r ? r.left + 40 : 100, r ? r.bottom : 100)
+      void openMenu(focus, r ? r.left + 40 : 100, r ? r.bottom : 100)
     }
   }
 
@@ -108,7 +111,7 @@ export function TrackTable({ label, count, row, onRange, columns = ['index', 'ti
               data-playing={t.id === playingId} data-dim={t.missing || !!t.unplayable}
               className={`${s.row} ${focus === it.index ? s.focus : ''}`} style={{ transform: `translateY(${top}px)` }}
               onClick={(e) => select(it.index, e)} onDoubleClick={() => onPlay(it.index)}
-              onContextMenu={(e) => { e.preventDefault(); openMenu(it.index, e.clientX, e.clientY) }}
+              onContextMenu={(e) => { e.preventDefault(); void openMenu(it.index, e.clientX, e.clientY) }}
             >
               {columns.map((c) => <span key={c} role="gridcell" className={s.cell}>{cell(c, t, it.index)}</span>)}
             </div>
