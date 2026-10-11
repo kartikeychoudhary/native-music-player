@@ -2,6 +2,7 @@ import { Link, useRouterState } from '@tanstack/react-router'
 import { PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { isActive, NAV } from '../lib/nav'
 import { S } from '../lib/strings'
+import { useLibrary } from '../stores/library'
 import { useUi } from '../stores/ui'
 import s from '../Layout.module.css'
 
@@ -29,5 +30,25 @@ export function Sidebar({ children }: { children?: React.ReactNode }) {
       </ul>
       {expanded && children}
     </nav>
+  )
+}
+
+export function SidebarPlaylists() {
+  const playlists = useLibrary((l) => l.playlists)
+  const pathname = useRouterState({ select: (r) => r.location.pathname })
+  if (!playlists.length) return null
+  return (
+    <>
+      <div className={s.sectionTitle}>{S.playlistsTitle.toUpperCase()}</div>
+      <ul className={s.nav}>
+        {playlists.map((p) => (
+          <li key={p.id}>
+            <Link to="/playlists/$playlistId" params={{ playlistId: String(p.id) }} className={s.navLink} aria-current={pathname === `/playlists/${p.id}` ? 'page' : undefined}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </>
   )
 }

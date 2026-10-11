@@ -8,6 +8,10 @@ import { GenresView } from './views/GenresView'
 import { GenreView } from './views/GenreView'
 import { HomeView } from './views/HomeView'
 import { NotFoundView } from './views/NotFoundView'
+import { PlaylistsView } from './views/PlaylistsView'
+import { PlaylistView } from './views/PlaylistView'
+import { QueueView } from './views/QueueView'
+import { SearchView } from './views/SearchView'
 import { SignalView } from './views/SignalView'
 
 const rootRoute = createRootRoute({ component: Layout, notFoundComponent: NotFoundView })
@@ -19,9 +23,13 @@ const artistRoute = createRoute({ getParentRoute: () => rootRoute, path: '/artis
 const genresRoute = createRoute({ getParentRoute: () => rootRoute, path: '/genres', component: GenresView })
 const genreRoute = createRoute({ getParentRoute: () => rootRoute, path: '/genres/$genreId', component: GenreView })
 const signalRoute = createRoute({ getParentRoute: () => rootRoute, path: '/signal', component: SignalView })
+const searchRoute = createRoute({ getParentRoute: () => rootRoute, path: '/search', component: SearchView })
+const playlistsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/playlists', component: PlaylistsView })
+const playlistRoute = createRoute({ getParentRoute: () => rootRoute, path: '/playlists/$playlistId', component: PlaylistView })
+const queueRoute = createRoute({ getParentRoute: () => rootRoute, path: '/queue', component: QueueView })
 
 // Later tasks add their routes to this list.
-export const routeTree = rootRoute.addChildren([homeRoute, albumsRoute, albumRoute, artistsRoute, artistRoute, genresRoute, genreRoute, signalRoute])
+export const routeTree = rootRoute.addChildren([homeRoute, albumsRoute, albumRoute, artistsRoute, artistRoute, genresRoute, genreRoute, searchRoute, playlistsRoute, playlistRoute, queueRoute, signalRoute])
 
 export function createAppRouter(history: RouterHistory = createHashHistory()) {
   return createRouter({ routeTree, history, defaultPreload: false })

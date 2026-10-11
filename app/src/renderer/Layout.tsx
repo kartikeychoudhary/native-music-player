@@ -4,8 +4,9 @@ import { ContextMenu } from './components/ContextMenu'
 import { EngineBanner } from './components/EngineBanner'
 import { PlayerBar } from './components/PlayerBar'
 import { PromptDialog } from './components/PromptDialog'
-import { Sidebar } from './components/Sidebar'
+import { Sidebar, SidebarPlaylists } from './components/Sidebar'
 import { Toasts } from './components/Toasts'
+import { TrackInfoDialog } from './components/TrackInfoDialog'
 import { handleShortcut } from './lib/shortcuts'
 import { S } from './lib/strings'
 import { usePlayer } from './stores/player'
@@ -33,7 +34,7 @@ export function Layout() {
   return (
     <div className={s.app} data-platform={api?.platform} data-expanded={expanded}>
       <div className={`${s.titlebar} drag`}><span className="mono">{S.app}</span></div>
-      <Sidebar />
+      <Sidebar><SidebarPlaylists /></Sidebar>
       <main className={s.main}>
         <EngineBanner />
         <Outlet />
@@ -42,6 +43,7 @@ export function Layout() {
       <ContextMenu />
       <Toasts />
       <PromptDialog />
+      <TrackInfoDialog />
     </div>
   )
 }

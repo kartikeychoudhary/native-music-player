@@ -28,7 +28,7 @@ export function PlayerBar() {
       </div>
       <div className={s.right}>
         <FormatBadges signal={signal} />
-        <button className={s.icon} aria-label="Queue" onClick={() => void navigate({ to: '/' })}><ListMusic size={16} /></button>
+        <button className={s.icon} aria-label="Queue" onClick={() => void navigate({ to: '/queue' })}><ListMusic size={16} /></button>
         <DevicePicker />
         <button
           role="switch" aria-checked={bitPerfect} aria-label="Bit-perfect" className={s.switch}

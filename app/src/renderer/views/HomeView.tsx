@@ -5,6 +5,7 @@ import { S } from '../lib/strings'
 import { useEngineQuery } from '../lib/useEngineQuery'
 import { useLibrary } from '../stores/library'
 import { usePlayer } from '../stores/player'
+import { PlaylistTile } from './PlaylistsView'
 import v from './views.module.css'
 
 function RecentTracks({ kind, title }: { kind: 'played' | 'mostPlayed'; title: string }) {
@@ -23,6 +24,7 @@ function RecentTracks({ kind, title }: { kind: 'played' | 'mostPlayed'; title: s
 export function HomeView() {
   const folders = useLibrary((l) => l.folders)
   const scan = useLibrary((l) => l.scan)
+  const playlists = useLibrary((l) => l.playlists)
   const { openFiles, playPaths, api } = usePlayer.getState()
   const added = useEngineQuery(['recent', 'added'], (a) => a.call('library.recent', { kind: 'added', limit: 12 }))
   const onDrop = (e: React.DragEvent) => {
@@ -57,6 +59,12 @@ export function HomeView() {
           )}
           <RecentTracks kind="played" title={S.recentlyPlayed} />
           <RecentTracks kind="mostPlayed" title={S.mostPlayed} />
+          {playlists.length > 0 && (
+            <section className={v.section}>
+              <h2 className={v.sectionTitle}>{S.playlistsTitle}</h2>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 14 }}>{playlists.slice(0, 6).map((p) => <PlaylistTile key={p.id} p={p} />)}</div>
+            </section>
+          )}
         </>
       )}
     </div>
