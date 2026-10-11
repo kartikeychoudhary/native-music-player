@@ -633,19 +633,22 @@ impl Player {
         let state = PlayerState {
             status: self.status,
             queue_index: entry.map(|_| self.cur as u32),
-            track: entry.map(|e| TrackSummary { path: e.path.to_string_lossy().into_owned(), title: e.title.clone(), duration_ms }),
+            queue_item_id: entry.map(|e| e.id),
+            track: entry.map(|e| TrackSummary { path: e.path.to_string_lossy().into_owned(), title: e.title.clone(), duration_ms, track_id: None, artist: None, album: None, artwork_id: None }),
             position_ms: self.position_ms(),
             duration_ms,
             volume: self.volume,
             mode: self.mode,
             device_id: self.device.clone(),
+            shuffle: false,
+            repeat: RepeatMode::Off,
         };
         *self.shared_state.lock().unwrap() = state.clone();
         if emit { let _ = self.events.send(PlayerEvent::State(state)); }
     }
 
     fn emit_queue(&self) {
-        let items = self.queue.iter().map(|e| QueueItem { id: e.id, path: e.path.to_string_lossy().into_owned(), title: e.title.clone() }).collect();
+        let items = self.queue.iter().map(|e| QueueItem { id: e.id, path: e.path.to_string_lossy().into_owned(), title: e.title.clone(), track_id: None, artist: None, album: None, artwork_id: None, duration_ms: None }).collect();
         let _ = self.events.send(PlayerEvent::Queue(QueueChanged { items, current: (!self.queue.is_empty()).then_some(self.cur as u32) }));
     }
 

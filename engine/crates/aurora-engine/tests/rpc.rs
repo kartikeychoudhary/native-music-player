@@ -61,7 +61,7 @@ fn handshake_comes_first() {
     let mut e = Engine::spawn();
     let first = e.next(Duration::from_secs(10));
     assert_eq!(first["method"], "engine.ready");
-    assert_eq!(first["params"]["protocolVersion"], 1);
+    assert_eq!(first["params"]["protocolVersion"], 2);
     assert!(first["params"]["features"].as_array().unwrap().iter().any(|f| f == "dsd"));
 }
 

@@ -11,7 +11,7 @@ describe('PlayerBar', () => {
 
   it('toggles playback through the store', () => {
     const toggle = vi.fn(async () => {})
-    usePlayer.setState({ toggle, state: { ...usePlayer.getState().state, status: 'paused', track: { path: '/a.flac', title: 'a', durationMs: 1000 } } })
+    usePlayer.setState({ toggle, state: { ...usePlayer.getState().state, status: 'paused', track: { path: '/a.flac', title: 'a', durationMs: 1000, trackId: null, artist: null, album: null, artworkId: null } } })
     render(<PlayerBar />)
     fireEvent.click(screen.getByRole('button', { name: 'Play' }))
     expect(toggle).toHaveBeenCalled()

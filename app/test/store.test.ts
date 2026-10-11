@@ -29,7 +29,7 @@ describe('player store', () => {
   })
 
   describe('signal path', () => {
-    const track = (path: string, queueIndex = 0) => ({ status: 'playing', queueIndex, track: { path, title: 't', durationMs: null }, positionMs: 0, durationMs: null, volume: 1, mode: 'processed', deviceId: null })
+    const track = (path: string, queueIndex = 0) => ({ status: 'playing', queueIndex, track: { path, title: 't', durationMs: null, trackId: null, artist: null, album: null, artworkId: null }, positionMs: 0, durationMs: null, volume: 1, mode: 'processed', deviceId: null })
 
     it('clears on queue.changed', () => {
       const { api, emit } = fakeApi()

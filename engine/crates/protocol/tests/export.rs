@@ -1,3 +1,4 @@
+use protocol::rpc::{PlaylistAddParams, QueueSetParams};
 use protocol::*;
 use std::path::PathBuf;
 
@@ -48,4 +49,57 @@ fn error_codes_match_spec() {
 fn output_mode_wire_names() {
     assert_eq!(serde_json::to_string(&OutputMode::BitPerfect).unwrap(), "\"bitPerfect\"");
     assert_eq!(serde_json::to_string(&Codec::HeAacV2).unwrap(), "\"he-aac-v2\"");
+}
+
+#[test]
+fn protocol_version_is_two() {
+    assert_eq!(PROTOCOL_VERSION, 2);
+}
+
+#[test]
+fn list_query_accepts_empty_object() {
+    let q: ListQuery = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert!(q.filter.is_none() && q.sort.is_none() && q.offset.is_none() && q.limit.is_none() && q.desc.is_none());
+    let q: ListQuery = serde_json::from_value(serde_json::json!({ "filter": { "artistId": 7 }, "sort": "addedAt", "desc": true, "offset": 100, "limit": 50 })).unwrap();
+    assert_eq!(q.filter.unwrap().artist_id, Some(7));
+    assert_eq!(q.sort, Some(SortKey::AddedAt));
+}
+
+#[test]
+fn library_rows_serialize_camel_case() {
+    let t = TrackRow {
+        id: 1, path: "/m/a.flac".into(), title: "A".into(), artist: "X, Y".into(), artist_id: Some(3), album: "Al".into(), album_id: Some(4),
+        album_artist: None, track_no: Some(1), disc_no: None, year: Some(1999), genre: None, duration_ms: Some(1000), codec: Some(Codec::Flac),
+        container: "flac".into(), bitrate_kbps: None, sample_rate: Some(96000), bit_depth: Some(24), channels: Some(2), artwork_id: None,
+        missing: false, unplayable: None, play_count: 0, added_at: 5, last_played_at: None,
+    };
+    let v = serde_json::to_value(&t).unwrap();
+    assert_eq!(v["artistId"], 3);
+    assert_eq!(v["trackNo"], 1);
+    assert_eq!(v["codec"], "flac");
+    assert_eq!(v["addedAt"], 5);
+    let p = Page { items: vec![t], total: 1 };
+    assert_eq!(serde_json::to_value(&p).unwrap()["total"], 1);
+}
+
+#[test]
+fn repeat_and_scan_wire_names() {
+    assert_eq!(serde_json::to_string(&RepeatMode::One).unwrap(), "\"one\"");
+    assert_eq!(serde_json::to_string(&ScanPhase::Walking).unwrap(), "\"walking\"");
+    assert_eq!(serde_json::to_string(&LibraryScope::Playlists).unwrap(), "\"playlists\"");
+    assert_eq!(serde_json::to_string(&RecentKind::MostPlayed).unwrap(), "\"mostPlayed\"");
+    let s = PlayerState::default();
+    let v = serde_json::to_value(&s).unwrap();
+    assert_eq!(v["repeat"], "off");
+    assert_eq!(v["shuffle"], false);
+    assert!(v["queueItemId"].is_null());
+}
+
+#[test]
+fn queue_params_defaults() {
+    let p: QueueSetParams = serde_json::from_value(serde_json::json!({ "trackIds": [3, 4] })).unwrap();
+    assert_eq!(p.track_ids, vec![3, 4]);
+    assert_eq!(p.start_index, None);
+    let p: PlaylistAddParams = serde_json::from_value(serde_json::json!({ "id": 1, "trackIds": [2] })).unwrap();
+    assert_eq!(p.index, None);
 }

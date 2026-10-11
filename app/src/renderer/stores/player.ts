@@ -32,7 +32,7 @@ export interface PlayerStore {
   dismissError(): void
 }
 
-const initialState: PlayerState = { status: 'stopped', queueIndex: null, track: null, positionMs: 0, durationMs: null, volume: 1, mode: 'processed', deviceId: null }
+const initialState: PlayerState = { status: 'stopped', queueIndex: null, queueItemId: null, track: null, positionMs: 0, durationMs: null, volume: 1, mode: 'processed', deviceId: null, shuffle: false, repeat: 'off' }
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
 
 export function livePosition(s: Pick<PlayerStore, 'state' | 'stamp'>, at: number): number {

@@ -115,10 +115,23 @@ pub struct DeviceInfo {
     pub exclusive_capable: bool,
 }
 
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum RepeatMode { #[default] Off, All, One }
+
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-pub struct TrackSummary { pub path: String, pub title: String, pub duration_ms: Option<u64> }
+pub struct TrackSummary {
+    pub path: String,
+    pub title: String,
+    pub duration_ms: Option<u64>,
+    pub track_id: Option<i64>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub artwork_id: Option<i64>,
+}
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
@@ -126,18 +139,30 @@ pub struct TrackSummary { pub path: String, pub title: String, pub duration_ms: 
 pub struct PlayerState {
     pub status: PlaybackStatus,
     pub queue_index: Option<u32>,
+    pub queue_item_id: Option<u32>,
     pub track: Option<TrackSummary>,
     pub position_ms: u64,
     pub duration_ms: Option<u64>,
     pub volume: f32,
     pub mode: OutputMode,
     pub device_id: Option<String>,
+    pub shuffle: bool,
+    pub repeat: RepeatMode,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-pub struct QueueItem { pub id: u32, pub path: String, pub title: String }
+pub struct QueueItem {
+    pub id: u32,
+    pub path: String,
+    pub title: String,
+    pub track_id: Option<i64>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub artwork_id: Option<i64>,
+    pub duration_ms: Option<u64>,
+}
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
