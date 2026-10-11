@@ -75,6 +75,9 @@ struct Active {
     prod: rtrb::Producer<u8>,
     shared: Arc<StreamShared>,
     info: StreamInfo,
+    /// Exclusive caps this stream was planned with. A real exclusive backend cannot re-probe a
+    /// device our own stream holds (EBUSY), so later plans reuse these.
+    excl_caps: Option<DeviceCaps>,
     /// Bytes committed to the ring (whole frames only).
     written_bytes: u64,
     /// Processed bytes waiting for ring space.
@@ -123,6 +126,8 @@ struct Player {
     /// Why exclusive access was denied on this device. While set, every plan is shared; it is
     /// cleared on SetMode, SetDevice and device loss.
     exclusive_denied: Option<String>,
+    /// Exclusive caps used by the most recent plan; handed to `Active` when a stream opens for it.
+    last_excl_caps: Option<DeviceCaps>,
     end_pending: bool,
     shown_idx: Option<usize>,
     resume_ms: Option<u64>,
@@ -146,7 +151,7 @@ impl Player {
         Self {
             backend, events, shared_state, queue: vec![], next_id: 1, cur: 0, status: PlaybackStatus::Stopped,
             volume: 1.0, mode: OutputMode::Processed, device: None, active: None, feeding: None, prepared: None,
-            prepare_failed: None, markers: VecDeque::new(), reopen: None, pending_start: false, exclusive_denied: None, end_pending: false, shown_idx: None, resume_ms: None,
+            prepare_failed: None, markers: VecDeque::new(), reopen: None, pending_start: false, exclusive_denied: None, last_excl_caps: None, end_pending: false, shown_idx: None, resume_ms: None,
             last_tick: Instant::now(), last_underruns: (0, Instant::now()), last_devices: (devices, Instant::now()),
             buffer_secs: cfg.buffer_secs, underrun_times: VecDeque::new(), cfg,
         }
@@ -263,11 +268,22 @@ impl Player {
 
     /// Plans `dec` for the current mode and device. Once exclusive access has been denied, plans
     /// are shared (processed) and carry the denial note, so gapless continuation still matches.
-    fn plan_for(&self, dec: &mut dyn TrackDecoder, current: Option<(OutputFormat, bool)>) -> PipelinePlan {
-        let dev = self.device.as_deref();
-        let force_shared = self.exclusive_denied.is_some();
+    fn plan_for(&mut self, dec: &mut dyn TrackDecoder, current: Option<(OutputFormat, bool)>) -> PipelinePlan {
+        let device = self.device.clone();
+        let dev = device.as_deref();
         let shared = self.backend.caps(dev, false).unwrap_or_else(|_| DeviceCaps::fallback());
-        let exclusive = (self.mode == OutputMode::BitPerfect && !force_shared).then(|| self.backend.caps(dev, true).ok()).flatten();
+        let mut exclusive = None;
+        if self.mode == OutputMode::BitPerfect && self.exclusive_denied.is_none() {
+            // While our own exclusive stream is open the device is busy to a fresh probe, so reuse its caps.
+            let held = self.active.as_ref().filter(|a| a.exclusive()).and_then(|a| a.excl_caps.clone());
+            match held.map(Ok).unwrap_or_else(|| self.backend.caps(dev, true)) {
+                Ok(c) => exclusive = Some(c),
+                Err(OutputError::ExclusiveDenied(reason)) => self.exclusive_denied = Some(reason),
+                Err(_) => {}
+            }
+        }
+        self.last_excl_caps = exclusive.clone();
+        let force_shared = self.exclusive_denied.is_some();
         let spec = dec.info().spec;
         let mut plan = plan_output(&PlanInput {
             source: &spec, dsd_rate: dec.info().dsd_rate, mode: if force_shared { OutputMode::Processed } else { self.mode },
@@ -288,7 +304,8 @@ impl Player {
         let mut stream = self.backend.open(self.device.as_deref(), fmt, plan.exclusive, src)?;
         stream.start()?;
         let info = stream.info().clone();
-        self.active = Some(Active { _stream: stream, prod, shared, info, written_bytes: 0, carry: vec![], carry_pos: 0 });
+        let excl_caps = if plan.exclusive { self.last_excl_caps.clone() } else { None };
+        self.active = Some(Active { _stream: stream, prod, shared, info, excl_caps, written_bytes: 0, carry: vec![], carry_pos: 0 });
         // Underrun reporting compares against the new ring's counter, which starts at 0.
         self.last_underruns.0 = 0;
         Ok(())

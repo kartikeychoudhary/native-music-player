@@ -238,3 +238,50 @@ fn exclusive_denial_is_sticky_and_keeps_gapless() {
     assert!(paths.len() >= 2, "{paths:?}");
     assert!(paths.iter().all(|s| s.notes.iter().any(|n| n.contains("Exclusive access denied (device busy)"))), "{paths:?}");
 }
+
+fn s16_bytes(f: &[f32]) -> Vec<u8> { f.iter().flat_map(|v| ((v * 32_768.0).round() as i16).to_le_bytes()).collect() }
+
+fn signal_paths(events: &[PlayerEvent]) -> Vec<&SignalPath> {
+    events.iter().filter_map(|e| if let PlayerEvent::SignalPath(s) = e { Some(s) } else { None }).collect()
+}
+
+#[test]
+fn exclusive_stream_keeps_its_caps_while_it_holds_the_device() {
+    // A real exclusive backend cannot re-probe a device our own stream holds; the player must reuse the caps it opened with.
+    let (p, h, rx) = setup(OutputMode::BitPerfect);
+    h.set_fail_caps_while_open(true);
+    queue(&p, &["gap_a.flac", "gap_b.flac"]);
+    let events = run_to_end(&h, &rx);
+    assert_eq!(h.opened().len(), 1);
+    assert!(h.opened()[0].1, "stream must be exclusive");
+    assert_eq!(h.recorded(), s16_bytes(&read_f32le("gap_src.f32le")));
+    let paths = signal_paths(&events);
+    assert!(!paths.is_empty());
+    assert!(paths.iter().all(|s| s.bit_perfect && s.notes.iter().all(|n| !n.contains("Exclusive mode unavailable"))), "{paths:?}");
+}
+
+#[test]
+fn seek_in_exclusive_mode_does_not_reopen_when_caps_are_busy() {
+    let (p, h, rx) = setup(OutputMode::BitPerfect);
+    h.set_fail_caps_while_open(true);
+    queue(&p, &["gap_a.flac"]);
+    pull_frames(&h, 4_410);
+    p.send(Command::Seek(500));
+    wait_for(&p, |s| s.position_ms == 500);
+    h.clear_recorded();
+    run_to_end(&h, &rx);
+    assert_eq!(h.opened().len(), 1);
+    assert!(h.opened()[0].1);
+    assert_eq!(h.recorded(), s16_bytes(&read_f32le("gap_src.f32le")[..110_583 * 2])[22_050 * 4..]);
+}
+
+#[test]
+fn caps_time_exclusive_denial_reports_its_reason() {
+    let (p, h, rx) = setup(OutputMode::BitPerfect);
+    h.set_deny_exclusive_caps(true);
+    queue(&p, &["short_a.flac"]);
+    let events = run_to_end(&h, &rx);
+    assert!(!h.opened()[0].1);
+    let paths = signal_paths(&events);
+    assert!(paths.iter().any(|s| !s.bit_perfect && s.notes.iter().any(|n| n.contains("device busy"))), "{paths:?}");
+}

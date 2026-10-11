@@ -21,6 +21,10 @@ struct Inner {
     opened: Mutex<Vec<(OutputFormat, bool)>>,
     source: Mutex<Option<RingSource>>,
     fail_exclusive: AtomicBool,
+    /// `caps(_, true)` is denied (as a real exclusive backend would) while a stream is open.
+    fail_caps_while_open: AtomicBool,
+    /// `caps(_, true)` is always denied.
+    deny_exclusive_caps: AtomicBool,
     /// Incremented per `open`; a stream only clears `source` if it is still the latest.
     generation: AtomicU64,
 }
@@ -45,6 +49,8 @@ impl NullBackend {
             opened: Mutex::new(Vec::new()),
             source: Mutex::new(None),
             fail_exclusive: AtomicBool::new(false),
+            fail_caps_while_open: AtomicBool::new(false),
+            deny_exclusive_caps: AtomicBool::new(false),
             generation: AtomicU64::new(0),
         });
         (NullBackend { inner: inner.clone() }, NullHandle { inner })
@@ -72,6 +78,8 @@ impl NullHandle {
     pub fn set_transport(&self, t: Transport) { *self.inner.transport.lock().unwrap() = t; }
     pub fn set_bluetooth(&self, b: Option<BluetoothInfo>) { *self.inner.bluetooth.lock().unwrap() = b; }
     pub fn set_fail_exclusive(&self, on: bool) { self.inner.fail_exclusive.store(on, Relaxed); }
+    pub fn set_fail_caps_while_open(&self, on: bool) { self.inner.fail_caps_while_open.store(on, Relaxed); }
+    pub fn set_deny_exclusive_caps(&self, on: bool) { self.inner.deny_exclusive_caps.store(on, Relaxed); }
     pub fn simulate_device_lost(&self) {
         if let Some(src) = self.inner.source.lock().unwrap().as_ref() { src.shared().device_lost.store(true, Release); }
     }
@@ -113,6 +121,11 @@ impl OutputBackend for NullBackend {
     fn caps(&self, _device: Option<&str>, exclusive: bool) -> Result<DeviceCaps, OutputError> {
         let caps = self.inner.caps.lock().unwrap().clone();
         if exclusive && !caps.exclusive { return Err(OutputError::Other("exclusive mode not available".into())); }
+        if exclusive {
+            let busy = self.inner.deny_exclusive_caps.load(Relaxed)
+                || (self.inner.fail_caps_while_open.load(Relaxed) && self.inner.source.lock().unwrap().is_some());
+            if busy { return Err(OutputError::ExclusiveDenied("device busy".into())); }
+        }
         Ok(caps)
     }
 
