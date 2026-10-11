@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
+import type { EngineStatus } from '@shared/api'
 import { EngineClient, type ChildLike } from './EngineClient'
 
-export type EngineStatus = { state: 'starting' | 'ready' | 'restarting' | 'failed' | 'mismatch'; message?: string }
 export type RestartDecision = { action: 'restart'; delayMs: number } | { action: 'giveUp' }
 
 export function restartDecision(crashTimes: number[], now: number): RestartDecision {
