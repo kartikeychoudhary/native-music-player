@@ -6,6 +6,7 @@ import { AUDIO_EXTENSIONS, isAllowedMethod } from '@shared/api'
 import { enginePath } from './engine/enginePath'
 import { EngineSupervisor } from './engine/supervisor'
 import { logDir, logger } from './logs'
+import { safeSend } from './safeSend'
 
 let win: BrowserWindow | null = null
 
@@ -14,7 +15,7 @@ const binary = () => enginePath({ isPackaged: app.isPackaged, resourcesPath: pro
 const supervisor = new EngineSupervisor(() => spawn(binary(), ['rpc'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }), { protocolVersion: PROTOCOL_VERSION })
 
 function send(event: string, payload: unknown) {
-  if (win && !win.isDestroyed()) win.webContents.send('aurora:event', event, payload)
+  safeSend(win, 'aurora:event', event, payload)
 }
 
 function createWindow() {
@@ -27,6 +28,7 @@ function createWindow() {
     webPreferences: { preload: join(__dirname, '../preload/index.js'), contextIsolation: true, nodeIntegration: false, sandbox: true },
   })
   win.once('ready-to-show', () => win?.show())
+  win.on('closed', () => { win = null })
   if (process.env.ELECTRON_RENDERER_URL) win.loadURL(process.env.ELECTRON_RENDERER_URL)
   else win.loadFile(join(__dirname, '../renderer/index.html'))
 }
@@ -35,7 +37,7 @@ app.whenReady().then(() => {
   const engineLog = logger('engine.log')
   supervisor.on('log', engineLog)
   supervisor.on('notification', (m: string, p: unknown) => send(m, p))
-  supervisor.on('status', (s) => { send('engine.status', s); engineLog(`[status] ${JSON.stringify(s)}`) })
+  supervisor.on('status', (s) => { engineLog(`[status] ${JSON.stringify(s)}`); send('engine.status', s) })
 
   ipcMain.handle('aurora:call', (_e, method: unknown, params: unknown) => {
     if (!isAllowedMethod(method)) throw new Error(`method not allowed: ${String(method)}`)
