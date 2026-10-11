@@ -317,3 +317,24 @@ fn scan_of_an_unknown_folder_fails_before_any_progress() {
     assert_eq!(events, 0);
 }
 
+#[test]
+fn unplugged_root_is_not_purged_and_not_stamped() {
+    let fx = setup();
+    let r = root(&fx);
+    build_tree(&r);
+    scan(&fx);
+    let stamped = fx.lib.folder(fx.folder).unwrap().last_scan_at;
+    let unplugged = r.with_file_name(format!("{}-unplugged", r.file_name().unwrap().to_string_lossy()));
+    std::fs::rename(&r, &unplugged).unwrap();
+    let t0 = library::unix_now();
+    let s = scan_with(&fx, &[], true, ScanOptions { now: Some(t0), ..Default::default() });
+    assert_eq!(s.missing, 3, "still marked missing (hidden while unplugged)");
+    let s = scan_with(&fx, &[], true, ScanOptions { now: Some(t0 + 31 * 86400), ..Default::default() });
+    assert_eq!(s.purged, 0, "an unplugged drive keeps its tracks (and their playlist items)");
+    let s = scan_with(&fx, std::slice::from_ref(&r), true, ScanOptions { now: Some(t0 + 62 * 86400), ..Default::default() });
+    assert_eq!(s.purged, 0, "roots equal to the folder root are a whole-folder scan too");
+    assert_eq!(count(&fx.lib.conn(), "SELECT COUNT(*) FROM tracks"), 3);
+    assert_eq!(fx.lib.folder(fx.folder).unwrap().last_scan_at, stamped, "a scan that couldn't see the folder isn't recorded");
+    std::fs::rename(&unplugged, &r).unwrap();
+    assert_eq!(scan(&fx).restored, 3);
+}

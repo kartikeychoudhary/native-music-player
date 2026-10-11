@@ -38,7 +38,8 @@ impl Scanner {
 
     /// Scans `roots` (files or folders inside folder `folder_id`; empty = the folder root).
     /// Tracks under `roots` that weren't found are marked missing. `full` also purges tracks missing
-    /// for longer than 30 days and records the scan time on the folder.
+    /// for longer than 30 days and records the scan time on the folder, unless the folder root can't
+    /// be listed (an unplugged drive).
     pub fn scan(&mut self, folder_id: i64, roots: &[PathBuf], full: bool, progress: &mut dyn FnMut(&ScanProgress), cancel: &AtomicBool) -> Result<ScanSummary> {
         scan(&mut self.conn, &self.art_dir, folder_id, roots, full, &self.opts, progress, cancel)
     }
@@ -312,6 +313,11 @@ fn run_scan(
     let now = opts.now.unwrap_or_else(crate::unix_now);
     // Re-collecting the components normalizes separators (callers may mix slash styles on Windows), so path keys match the DB.
     let roots: Vec<PathBuf> = if roots.is_empty() { vec![PathBuf::from(folder_root)] } else { roots.iter().map(|r| r.components().collect()).collect() };
+    // A whole-folder scan of a root that can't be listed (an unplugged drive) still marks its tracks
+    // missing, but mustn't start their 30-day purge clock as a completed scan: nothing is purged and
+    // the scan time isn't recorded, so playlists survive until the drive comes back.
+    let whole_folder = roots.iter().any(|r| r.as_path() == Path::new(folder_root));
+    let root_unavailable = whole_folder && std::fs::read_dir(folder_root).is_err();
 
     let mut files = vec![];
     let mut covers = Covers::new();
@@ -383,7 +389,7 @@ fn run_scan(
         tx.execute("UPDATE tracks SET missing_since = ?1 WHERE id = ?2", params![now, id])?;
         summary.missing += 1;
     }
-    if full {
+    if full && !root_unavailable {
         summary.purged = tx.execute(
             "DELETE FROM tracks WHERE folder_id = ?1 AND missing_since IS NOT NULL AND missing_since <= ?2",
             params![folder_id, now - MISSING_RETENTION_SECS],
