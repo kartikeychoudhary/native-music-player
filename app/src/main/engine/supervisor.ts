@@ -15,6 +15,8 @@ export class EngineSupervisor extends EventEmitter {
   private isReady = false
   private crashes: number[] = []
   private stopping = false
+  /** Bumped by every start()/stop()/restart(); a scheduled restart only fires if its generation is still current. */
+  private generation = 0
   private current: EngineStatus = { state: 'starting' }
   private now: () => number
   private schedule: (fn: () => void, ms: number) => void
@@ -30,8 +32,12 @@ export class EngineSupervisor extends EventEmitter {
   private setStatus(s: EngineStatus) { this.current = s; this.emit('status', s) }
 
   start() {
+    this.generation++
     this.stopping = false
     this.isReady = false
+    const old = this.client
+    this.client = null // detach first so the old child's exit is not counted as a crash
+    old?.dispose()
     this.setStatus({ state: 'starting' })
     let child: ChildLike
     try { child = this.spawn() } catch (e) { this.setStatus({ state: 'failed', message: `Couldn't start the audio engine: ${(e as Error).message}` }); return }
@@ -40,6 +46,12 @@ export class EngineSupervisor extends EventEmitter {
     client.on('notification', (m, p) => this.emit('notification', m, p))
     client.on('log', (l) => this.emit('log', l))
     client.on('exit', () => this.onExit(client))
+    client.on('spawnError', (e: Error) => {
+      if (this.client !== client || this.isReady) return
+      this.stopping = true // spawn failures (e.g. ENOENT) are not retried
+      this.setStatus({ state: 'failed', message: `Couldn't start the audio engine: ${e.message}` })
+      client.dispose()
+    })
     client.ready().then(
       () => { if (this.client === client) { this.isReady = true; this.setStatus({ state: 'ready' }) } },
       (e) => {
@@ -60,17 +72,17 @@ export class EngineSupervisor extends EventEmitter {
     const d = restartDecision(this.crashes, this.now())
     if (d.action === 'giveUp') { this.setStatus({ state: 'failed', message: 'The audio engine crashed 3 times in a minute.' }); return }
     this.setStatus({ state: 'restarting' })
-    this.schedule(() => { if (!this.stopping) this.start() }, d.delayMs)
+    const gen = this.generation
+    this.schedule(() => { if (!this.stopping && this.generation === gen) this.start() }, d.delayMs)
   }
 
   restart() {
     this.crashes = []
-    this.stopping = true
-    this.client?.dispose()
     this.start()
   }
 
   async stop() {
+    this.generation++
     this.stopping = true
     const c = this.client
     if (!c) return

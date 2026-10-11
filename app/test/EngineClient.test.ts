@@ -69,4 +69,48 @@ describe('EngineClient', () => {
     ;(child.stdout as unknown as PassThrough).write('garbage\n')
     await expect(log).resolves.toMatch(/garbage/)
   })
+
+  it('routes valid-JSON non-object lines to log without throwing', async () => {
+    const { child } = fakeChild()
+    const c = new EngineClient(child, { protocolVersion: 1 })
+    const logs: string[] = []
+    c.on('log', (l) => logs.push(l))
+    const out = child.stdout as unknown as PassThrough
+    out.write('null\n')
+    out.write('123\n')
+    out.write('[1]\n')
+    await new Promise((r) => setImmediate(r))
+    expect(logs).toHaveLength(3)
+  })
+
+  it('treats engine.ready without params as a protocol mismatch', async () => {
+    const { child, emit } = fakeChild()
+    const c = new EngineClient(child, { protocolVersion: 1 })
+    const logs: string[] = []
+    c.on('log', (l) => logs.push(l))
+    emit({ jsonrpc: '2.0', method: 'engine.ready' })
+    await expect(c.ready()).rejects.toMatchObject({ code: 'PROTOCOL_MISMATCH' })
+    expect(logs.join('\n')).toMatch(/malformed/)
+  })
+
+  it('swallows stdin errors (EPIPE) and logs them', async () => {
+    const { child, emit } = fakeChild()
+    const c = new EngineClient(child, { protocolVersion: 1 })
+    const log = new Promise((r) => c.on('log', r))
+    emit(ready())
+    expect(() => (child.stdin as unknown as PassThrough).emit('error', new Error('write EPIPE'))).not.toThrow()
+    await expect(log).resolves.toMatch(/EPIPE/)
+  })
+
+  it('rejects ready and pending calls on a child spawn error, emitting spawnError', async () => {
+    const { child } = fakeChild()
+    const c = new EngineClient(child, { protocolVersion: 1 })
+    const p = c.call('x')
+    const spawnErr = new Promise((r) => c.on('spawnError', r))
+    const err = Object.assign(new Error('spawn engine ENOENT'), { code: 'ENOENT' })
+    child.emit('error', err)
+    await expect(c.ready()).rejects.toThrow(/ENOENT/)
+    await expect(p).rejects.toThrow(/ENOENT/)
+    await expect(spawnErr).resolves.toBe(err)
+  })
 })

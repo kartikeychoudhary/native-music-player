@@ -8,6 +8,7 @@ export interface ChildLike {
   stderr: NodeJS.ReadableStream
   kill(): boolean
   on(e: 'exit', cb: (code: number | null) => void): unknown
+  on(e: 'error', cb: (err: Error) => void): unknown
 }
 
 export class RpcError extends Error {
@@ -20,6 +21,7 @@ export class EngineClient extends EventEmitter {
   private pending = new Map<number, Pending>()
   private nextId = 1
   private exited = false
+  private isReady = false
   private readyPromise: Promise<EngineReady>
   private settleReady!: { resolve: (r: EngineReady) => void; reject: (e: Error) => void }
 
@@ -35,17 +37,31 @@ export class EngineClient extends EventEmitter {
     child.stderr.on('data', (c: string | Buffer) => err.push(c.toString()).forEach((l) => this.emit('log', l)))
     child.on('exit', (code) => {
       this.exited = true
-      const e = new Error(`engine exited (code ${code})`)
-      this.settleReady.reject(e)
-      for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(e) }
-      this.pending.clear()
+      this.failPending(new Error(`engine exited (code ${code})`))
       this.emit('exit', code)
     })
+    // A failed spawn (e.g. ENOENT) emits 'error' instead of 'exit'. Before ready it is fatal for this client;
+    // afterwards the exit path handles any real death, so the error is only logged.
+    child.on('error', (err) => {
+      if (this.isReady || this.exited) { this.emit('log', `engine process error: ${err.message}`); return }
+      this.exited = true
+      this.failPending(err)
+      this.emit('spawnError', err)
+    })
+    // Writes to a dead child's stdin can raise EPIPE; the exit path deals with the death itself.
+    child.stdin.on('error', (err: Error) => this.emit('log', `engine stdin error: ${err.message}`))
+  }
+
+  private failPending(e: Error) {
+    this.settleReady.reject(e)
+    for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(e) }
+    this.pending.clear()
   }
 
   private onLine(line: string) {
     let msg: any
     try { msg = JSON.parse(line) } catch { this.emit('log', `non-JSON stdout line: ${line}`); return }
+    if (typeof msg !== 'object' || msg === null || Array.isArray(msg)) { this.emit('log', `malformed stdout message: ${line}`); return }
     if (msg.id !== undefined && msg.id !== null && ('result' in msg || 'error' in msg)) {
       const p = this.pending.get(msg.id)
       if (!p) return
@@ -56,13 +72,17 @@ export class EngineClient extends EventEmitter {
       return
     }
     if (msg.method === 'engine.ready') {
-      const r = msg.params as EngineReady
-      if (r.protocolVersion !== this.opts.protocolVersion) {
+      const r = msg.params as EngineReady | undefined
+      if (typeof r !== 'object' || r === null) {
+        this.emit('log', `malformed engine.ready: ${line}`)
+        this.settleReady.reject(Object.assign(new Error('malformed engine.ready'), { code: 'PROTOCOL_MISMATCH' }))
+      } else if (r.protocolVersion !== this.opts.protocolVersion) {
         this.settleReady.reject(Object.assign(new Error(`protocol ${r.protocolVersion} != ${this.opts.protocolVersion}`), { code: 'PROTOCOL_MISMATCH' }))
-      } else this.settleReady.resolve(r)
+      } else { this.isReady = true; this.settleReady.resolve(r) }
       return
     }
     if (typeof msg.method === 'string') this.emit('notification', msg.method, msg.params)
+    else this.emit('log', `malformed stdout message: ${line}`)
   }
 
   ready(): Promise<EngineReady> { return this.readyPromise }
