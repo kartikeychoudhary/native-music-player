@@ -16,6 +16,8 @@ lofty.workspace = true
 image.workspace = true
 webp.workspace = true
 blake3.workspace = true
+jwalk.workspace = true
+rayon.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

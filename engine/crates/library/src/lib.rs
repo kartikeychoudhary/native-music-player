@@ -1,8 +1,10 @@
 //! Aurora's music library: scanning, tags, artwork, SQLite storage and queries (spec §3.9).
 pub mod artwork;
+pub mod codec;
 pub mod db;
 pub mod error;
 pub mod palette;
+pub mod scan;
 pub mod tags;
 
 use std::path::{Path, PathBuf};
@@ -62,6 +64,11 @@ impl Library {
     pub fn dir(&self) -> &Path { &self.dir }
     pub fn db_path(&self) -> PathBuf { self.dir.join("library.db") }
     pub fn artwork_dir(&self) -> PathBuf { self.dir.join("artwork") }
+
+    /// A scanner with its own connection, for a worker thread (WAL lets it write while queries read).
+    pub fn scanner(&self, opts: scan::ScanOptions) -> Result<scan::Scanner> {
+        Ok(scan::Scanner::new(db::connect(&self.db_path())?, self.artwork_dir(), opts))
+    }
 
     /// The shared connection. Hidden: for this crate's modules, tests and the scan worker setup.
     #[doc(hidden)]
