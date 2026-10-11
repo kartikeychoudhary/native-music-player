@@ -182,6 +182,8 @@ struct Player {
     /// Exclusive caps used by the most recent plan; handed to `Active` when a stream opens for it.
     last_excl_caps: Option<DeviceCaps>,
     end_pending: bool,
+    /// The `current` last sent in `queue.changed`, so a track change re-sends the queue.
+    queue_current: Option<usize>,
     shown_idx: Option<usize>,
     resume_ms: Option<u64>,
     last_tick: Instant,
@@ -202,7 +204,7 @@ impl Player {
         Self {
             backend, events, shared_state, queue: Queue::new(seed), cur: 0, status: PlaybackStatus::Stopped,
             volume: 1.0, mode: OutputMode::Processed, device: None, active: None, feeding: None, prepared: None,
-            prepare_failed: None, markers: VecDeque::new(), reopen: None, pending_start: false, exclusive_denied: None, last_excl_caps: None, end_pending: false, shown_idx: None, resume_ms: None,
+            prepare_failed: None, markers: VecDeque::new(), reopen: None, pending_start: false, exclusive_denied: None, last_excl_caps: None, end_pending: false, queue_current: None, shown_idx: None, resume_ms: None,
             last_tick: Instant::now(), last_underruns: (0, Instant::now()), last_devices: (devices, Instant::now()),
             buffer_secs: cfg.buffer_secs, underrun_times: VecDeque::new(), cfg,
         }
@@ -272,7 +274,8 @@ impl Player {
             Command::Stop => { self.stop_internal(); self.publish(true); }
             Command::Next => match self.queue.user_next(self.cur) {
                 Some(n) => self.start_at(n, 0),
-                None => { self.stop_internal(); self.publish(true) }
+                // Past the last entry: stop back at the top, as when the queue ends by itself.
+                None => { self.stop_internal(); self.cur = 0; self.publish(true) }
             },
             Command::Prev => {
                 if self.queue.is_empty() { return; }
@@ -863,6 +866,7 @@ impl Player {
 
     fn publish(&mut self, emit: bool) {
         self.last_tick = Instant::now();
+        if emit && self.queue_current != (!self.queue.is_empty()).then_some(self.cur) { self.emit_queue(); }
         let entry = self.queue.get(self.cur);
         let duration_ms = self.markers.front().filter(|m| m.idx == self.cur).and_then(|m| m.duration_ms).or_else(|| entry.and_then(|e| e.duration_ms));
         let state = PlayerState {
@@ -885,8 +889,9 @@ impl Player {
         if emit { let _ = self.events.send(PlayerEvent::State(state)); }
     }
 
-    fn emit_queue(&self) {
-        let current = (!self.queue.is_empty()).then_some(self.cur as u32);
+    fn emit_queue(&mut self) {
+        self.queue_current = (!self.queue.is_empty()).then_some(self.cur);
+        let current = self.queue_current.map(|c| c as u32);
         let _ = self.events.send(PlayerEvent::Queue(QueueChanged { items: self.queue.items(), current }));
     }
 

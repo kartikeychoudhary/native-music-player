@@ -266,3 +266,34 @@ fn played_threshold_rule() {
     assert_eq!(played_threshold_ms(None), 240_000);
     assert_eq!(played_threshold_ms(Some(0)), 1);
 }
+
+#[test]
+fn queue_current_follows_next_and_gapless_advances() {
+    let (p, h, rx) = setup();
+    play(&p, &["short_a.flac", "short_b.flac", "gap_a.flac"]);
+    wait_for(&p, |s| s.status == PlaybackStatus::Playing);
+    p.send(Command::Next);
+    let start = Instant::now();
+    while !rx.recv_timeout(Duration::from_millis(100)).is_ok_and(|e| matches!(e, PlayerEvent::Queue(q) if q.current == Some(1))) {
+        assert!(start.elapsed() < Duration::from_secs(5), "no queue.changed moved current to the next entry");
+    }
+    // short_b ends on its own: the gapless move onto gap_a must also move the queue's current entry.
+    let events = run(&h, &rx, usize::MAX);
+    assert!(events.iter().any(|e| matches!(e, PlayerEvent::Queue(q) if q.current == Some(2))), "{events:?}");
+}
+
+#[test]
+fn next_past_the_last_entry_stops_and_rewinds_to_the_top() {
+    let (p, _h, rx) = setup();
+    p.send(Command::SetShuffle(true));
+    play(&p, &["short_a.flac", "short_b.flac"]);
+    wait_for(&p, |s| s.status == PlaybackStatus::Playing);
+    p.send(Command::Next);
+    wait_for(&p, |s| s.queue_index == Some(1) && s.status == PlaybackStatus::Playing);
+    p.send(Command::Next);
+    wait_for(&p, |s| s.status == PlaybackStatus::Stopped);
+    assert_eq!(p.state().queue_index, Some(0), "back at the top, like a queue that ended by itself");
+    assert_eq!(last_queue(&rx).current, Some(0));
+    p.send(Command::Next);
+    wait_for(&p, |s| s.queue_index == Some(1) && s.status == PlaybackStatus::Playing);
+}
