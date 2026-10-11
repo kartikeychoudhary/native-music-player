@@ -85,6 +85,29 @@ fn devices(null: bool) -> i32 {
     }
 }
 
+/// Decides when `play` is done. The player thread keeps its event sender alive, so the CLI
+/// loop must end on events: `Ended`, or a `stopped` state after playback began or an error
+/// occurred, or a `paused` state after an error (device loss pauses instead of stopping).
+/// The initial stopped state published by SetQueue precedes all of these and must not end it.
+#[derive(Default)]
+struct PlayProgress { saw_playing: bool, saw_error: bool }
+
+impl PlayProgress {
+    /// Records `ev`; returns true when the loop should stop.
+    fn observe(&mut self, ev: &PlayerEvent) -> bool {
+        match ev {
+            PlayerEvent::Ended => true,
+            PlayerEvent::Error(_) => { self.saw_error = true; false }
+            PlayerEvent::State(st) => match st.status {
+                PlaybackStatus::Playing => { self.saw_playing = true; false }
+                PlaybackStatus::Stopped => self.saw_playing || self.saw_error,
+                PlaybackStatus::Paused => self.saw_error,
+            },
+            _ => false,
+        }
+    }
+}
+
 fn play(files: Vec<PathBuf>, bit_perfect: bool, device: Option<String>, null: bool, speed: f64) -> i32 {
     if files.is_empty() {
         eprintln!("play: no files given");
@@ -96,27 +119,60 @@ fn play(files: Vec<PathBuf>, bit_perfect: bool, device: Option<String>, null: bo
     if device.is_some() { player.send(Command::SetDevice(device)); }
     player.send(Command::SetQueue { paths: files, start: 0 });
     player.send(Command::Play(None));
-    // The player thread keeps its sender alive, so the loop must end on events: `Ended`, or a
-    // `stopped` state after playback began or an error occurred (the initial stopped state
-    // published by SetQueue precedes both and must not end it).
-    let (mut saw_error, mut saw_playing) = (false, false);
+    let mut progress = PlayProgress::default();
+    let mut finished = false;
     for ev in rx.iter() {
-        let line = match &ev {
-            PlayerEvent::SignalPath(s) => serde_json::json!({ "event": "signalPath", "data": s }),
-            PlayerEvent::Error(e) => { saw_error = true; serde_json::json!({ "event": "error", "data": e }) }
-            PlayerEvent::State(st) => {
-                match st.status {
-                    PlaybackStatus::Playing => saw_playing = true,
-                    PlaybackStatus::Stopped if saw_playing || saw_error => break,
-                    _ => {}
-                }
-                continue;
-            }
-            PlayerEvent::Ended => { println!("{}", serde_json::json!({ "event": "ended" })); break; }
-            _ => continue,
-        };
-        println!("{line}");
+        let stop = progress.observe(&ev);
+        match &ev {
+            PlayerEvent::SignalPath(s) => println!("{}", serde_json::json!({ "event": "signalPath", "data": s })),
+            PlayerEvent::Error(e) => println!("{}", serde_json::json!({ "event": "error", "data": e })),
+            PlayerEvent::Ended => println!("{}", serde_json::json!({ "event": "ended" })),
+            _ => {}
+        }
+        if stop { finished = true; break; }
     }
     player.shutdown();
-    i32::from(saw_error)
+    // Exit 1 on any error, or if the event stream died before a terminal state (player thread gone).
+    i32::from(progress.saw_error || !finished)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use engine_core::player::PlayerEvent;
+    use protocol::{EngineErrorEvent, PlayerState};
+
+    fn state(status: PlaybackStatus) -> PlayerEvent { PlayerEvent::State(PlayerState { status, ..Default::default() }) }
+    fn error() -> PlayerEvent {
+        PlayerEvent::Error(EngineErrorEvent { code: 1, name: "X".into(), message: "m".into(), path: None })
+    }
+    fn run(events: &[PlayerEvent]) -> Vec<bool> {
+        let mut p = PlayProgress::default();
+        events.iter().map(|e| p.observe(e)).collect()
+    }
+
+    #[test]
+    fn initial_stopped_does_not_stop() {
+        assert_eq!(run(&[state(PlaybackStatus::Stopped)]), [false]);
+    }
+    #[test]
+    fn playing_then_stopped_stops() {
+        assert_eq!(run(&[state(PlaybackStatus::Stopped), state(PlaybackStatus::Playing), state(PlaybackStatus::Stopped)]), [false, false, true]);
+    }
+    #[test]
+    fn error_then_paused_stops() {
+        assert_eq!(run(&[state(PlaybackStatus::Playing), error(), state(PlaybackStatus::Paused)]), [false, false, true]);
+    }
+    #[test]
+    fn error_then_stopped_stops() {
+        assert_eq!(run(&[error(), state(PlaybackStatus::Stopped)]), [false, true]);
+    }
+    #[test]
+    fn ended_stops() {
+        assert_eq!(run(&[PlayerEvent::Ended]), [true]);
+    }
+    #[test]
+    fn paused_without_error_does_not_stop() {
+        assert_eq!(run(&[state(PlaybackStatus::Playing), state(PlaybackStatus::Paused)]), [false, false]);
+    }
 }
