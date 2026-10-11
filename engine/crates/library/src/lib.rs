@@ -5,6 +5,7 @@ pub mod db;
 pub mod error;
 pub mod history;
 pub mod palette;
+pub mod playlists;
 pub mod query;
 mod rows;
 pub mod scan;
