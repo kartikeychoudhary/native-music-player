@@ -16,6 +16,8 @@ pub struct Ctx {
     pub backend: Arc<dyn OutputBackend>,
     pub queue: Arc<Mutex<QueueChanged>>,
     pub library: Option<Arc<LibraryService>>,
+    /// Why the library failed to open when `--data-dir` was given (`library` is then `None`).
+    pub library_error: Option<String>,
 }
 
 pub enum Outcome { Reply(Value), Shutdown }
@@ -41,7 +43,7 @@ pub fn entry_from_row(t: TrackRow) -> NewEntry {
 }
 
 fn entries_for(ctx: &Ctx, ids: &[i64]) -> Result<Vec<NewEntry>, RpcError> {
-    let svc = ctx.library.as_deref().ok_or_else(unavailable)?;
+    let svc = ctx.library.as_deref().ok_or_else(|| unavailable(ctx.library_error.as_deref()))?;
     Ok(svc.lib.tracks_by_ids(ids).map_err(lib_err)?.into_iter().map(entry_from_row).collect())
 }
 
@@ -93,7 +95,7 @@ pub fn dispatch(ctx: &Ctx, method: &str, p: Value) -> Result<Outcome, RpcError> 
         "queue.get" => Ok(Outcome::Reply(serde_json::to_value(&*ctx.queue.lock().unwrap_or_else(|p| p.into_inner())).unwrap())),
         "devices.list" => ctx.backend.devices().map(|d| Outcome::Reply(serde_json::to_value(d).unwrap())).map_err(|e| err(e.code().code(), e.to_string())),
         "engine.shutdown" => Ok(Outcome::Shutdown),
-        other => match library_methods::dispatch(ctx.library.as_deref(), other, p) {
+        other => match library_methods::dispatch(ctx.library.as_deref(), ctx.library_error.as_deref(), other, p) {
             Some(r) => r.map(Outcome::Reply),
             None => Err(err(-32601, format!("method not found: {other}"))),
         },

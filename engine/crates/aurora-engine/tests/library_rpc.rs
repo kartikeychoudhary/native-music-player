@@ -25,6 +25,23 @@ fn library_methods_need_a_data_dir() {
 }
 
 #[test]
+fn library_methods_report_why_the_library_failed_to_open() {
+    let data = tempfile::tempdir().unwrap();
+    let conn = library::db::connect(&data.path().join("library.db")).unwrap();
+    conn.execute_batch("PRAGMA user_version = 99").unwrap();
+    drop(conn);
+    let mut e = with_library(data.path());
+    let notice = e.notified("engine.error", |p| p["code"] == -32008);
+    assert!(notice["message"].as_str().unwrap().contains("newer Aurora"), "{notice}");
+    let v = e.call("library.folders", json!({}));
+    assert_eq!(v["error"]["code"], -32008, "{v}");
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(msg.starts_with("library unavailable: ") && msg.contains("newer Aurora") && !msg.contains("--data-dir"), "{msg}");
+    let v = e.call("queue.set", json!({ "trackIds": [1] }));
+    assert!(v["error"]["message"].as_str().unwrap().contains("newer Aurora"), "{v}");
+}
+
+#[test]
 fn add_folder_scans_lists_and_plays_by_track_id() {
     let data = tempfile::tempdir().unwrap();
     let music = music_dir(&["short_a.flac", "short_b.flac"]);

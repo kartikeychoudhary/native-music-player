@@ -10,15 +10,18 @@ use serde_json::{json, Value};
 use super::dispatch::params;
 use super::library_service::LibraryService;
 
-pub const UNAVAILABLE: &str = "library unavailable: engine started without --data-dir";
+pub const NO_DATA_DIR: &str = "engine started without --data-dir";
 
 pub fn lib_err(e: LibError) -> RpcError {
     let c = e.code();
     RpcError { code: c.code(), message: e.to_string(), data: Some(json!({ "name": c.name() })) }
 }
 
-pub fn unavailable() -> RpcError {
-    RpcError { code: ErrorCode::DbError.code(), message: UNAVAILABLE.into(), data: Some(json!({ "name": ErrorCode::DbError.name() })) }
+/// The error for library methods when there's no library: `open_error` is why `Library::open`
+/// failed, or `None` when the engine was started without `--data-dir`.
+pub fn unavailable(open_error: Option<&str>) -> RpcError {
+    let cause = open_error.unwrap_or(NO_DATA_DIR);
+    RpcError { code: ErrorCode::DbError.code(), message: format!("library unavailable: {cause}"), data: Some(json!({ "name": ErrorCode::DbError.name() })) }
 }
 
 fn reply<T: Serialize>(r: Result<T, LibError>) -> Result<Value, RpcError> {
@@ -33,10 +36,11 @@ fn with_gapless(mut d: TrackDetail) -> TrackDetail {
     d
 }
 
-/// Handles `library.*` and `playlists.*`; `None` for any other method.
-pub fn dispatch(svc: Option<&LibraryService>, method: &str, p: Value) -> Option<Result<Value, RpcError>> {
+/// Handles `library.*` and `playlists.*`; `None` for any other method. Without a library they fail
+/// with `unavailable(open_error)`.
+pub fn dispatch(svc: Option<&LibraryService>, open_error: Option<&str>, method: &str, p: Value) -> Option<Result<Value, RpcError>> {
     if !(method.starts_with("library.") || method.starts_with("playlists.")) { return None; }
-    Some(match svc { Some(svc) => handle(svc, method, p), None => Err(unavailable()) })
+    Some(match svc { Some(svc) => handle(svc, method, p), None => Err(unavailable(open_error)) })
 }
 
 fn handle(svc: &LibraryService, method: &str, p: Value) -> Result<Value, RpcError> {

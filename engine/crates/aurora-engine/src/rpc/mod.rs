@@ -106,7 +106,7 @@ pub fn run(opts: RunOptions) -> i32 {
     };
 
     out.notify("engine.ready", EngineReady { version: env!("CARGO_PKG_VERSION").into(), protocol_version: PROTOCOL_VERSION, features: features() });
-    if let Some(e) = library_error { notify_error(&out, e.code(), format!("Library unavailable: {e}")); }
+    if let Some(e) = &library_error { notify_error(&out, e.code(), format!("Library unavailable: {e}")); }
     if let Some(svc) = &library { svc.begin(); }
 
     let os_tx = crate::osmedia::enabled().then(|| {
@@ -158,7 +158,7 @@ pub fn run(opts: RunOptions) -> i32 {
         }).expect("spawn session saver")
     });
 
-    let ctx = Ctx { player, backend, queue, library: library.clone() };
+    let ctx = Ctx { player, backend, queue, library: library.clone(), library_error: library_error.map(|e| e.to_string()) };
     let mut stdin = std::io::stdin().lock();
     let mut buf = Vec::new();
     loop {
