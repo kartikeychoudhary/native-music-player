@@ -23,6 +23,7 @@ function RecentTracks({ kind, title }: { kind: 'played' | 'mostPlayed'; title: s
 
 export function HomeView() {
   const folders = useLibrary((l) => l.folders)
+  const foldersLoaded = useLibrary((l) => l.foldersLoaded)
   const scan = useLibrary((l) => l.scan)
   const playlists = useLibrary((l) => l.playlists)
   const { openFiles, playPaths, api } = usePlayer.getState()
@@ -32,14 +33,13 @@ export function HomeView() {
     const paths = api?.pathsForFiles([...e.dataTransfer.files]) ?? []
     if (paths.length) void playPaths(paths)
   }
-  const scanning = scan && scan.phase !== 'done'
   return (
     <div className={v.view} onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
       <div className={v.toolbar}>
         <h1 className={v.title}>{S.homeTitle}</h1>
-        {scanning && <span className={v.meta} role="status">{S.scanning(scan.processed, scan.total)}</span>}
+        {scan && <span className={v.meta} role="status">{S.scanning(scan.processed, scan.total)}</span>}
       </div>
-      {folders.length === 0 ? (
+      {!foldersLoaded ? null : folders.length === 0 ? (
         <div className={v.empty}>
           <h2>{S.emptyLibrary}</h2>
           <p className="muted">{S.emptyLibraryHint}</p>

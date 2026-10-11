@@ -32,6 +32,36 @@ describe('library store', () => {
     expect(useLibrary.getState().scan?.processed).toBe(5)
   })
 
+  it('clears scan progress when the scan ends', () => {
+    const { api, emit } = fakeApi()
+    useLibrary.getState().connect(api)
+    emit('library.scanProgress', { folderId: 1, phase: 'reading', processed: 5, total: 10, added: 5, updated: 0, missing: 0 })
+    emit('library.scanProgress', { folderId: 1, phase: 'done', processed: 7, total: 10, added: 7, updated: 0, missing: 0 })
+    expect(useLibrary.getState().scan).toBeNull()
+  })
+
+  it('drops scan progress of a folder that is no longer in the library', async () => {
+    let folders = [{ id: 1, path: '/m', trackCount: 3, lastScanAt: 1, available: true }]
+    const { api, emit } = fakeApi({ 'library.folders': () => folders })
+    useLibrary.getState().connect(api)
+    await vi.waitFor(() => expect(useLibrary.getState().folders).toHaveLength(1))
+    emit('library.scanProgress', { folderId: 1, phase: 'reading', processed: 5, total: 10, added: 5, updated: 0, missing: 0 })
+    folders = []
+    emit('library.changed', { scopes: ['folders'] })
+    await vi.waitFor(() => expect(useLibrary.getState().folders).toHaveLength(0))
+    expect(useLibrary.getState().scan).toBeNull()
+  })
+
+  it('marks folders loaded only after the first successful load', async () => {
+    let resolve: (f: unknown[]) => void = () => {}
+    const { api } = fakeApi({ 'library.folders': () => new Promise((r) => { resolve = r }) })
+    useLibrary.getState().connect(api)
+    await vi.waitFor(() => expect(api.call).toHaveBeenCalledWith('library.folders', {}))
+    expect(useLibrary.getState().foldersLoaded).toBe(false)
+    resolve([])
+    await vi.waitFor(() => expect(useLibrary.getState().foldersLoaded).toBe(true))
+  })
+
   it('adds the picked folder, and does nothing when the picker is cancelled', async () => {
     const { api, calls } = fakeApi({ 'library.addFolder': (p) => ({ id: 2, path: p.path, trackCount: 0, lastScanAt: null, available: true }) })
     useLibrary.getState().connect(api)

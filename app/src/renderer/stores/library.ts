@@ -10,6 +10,9 @@ export interface LibraryStore {
   api: AuroraApi | null
   versions: Record<LibraryScope, number>
   folders: Folder[]
+  /** False until the first folder list arrives, so views don't flash an empty library at startup. */
+  foldersLoaded: boolean
+  /** The running scan; cleared when it ends or its folder leaves the library. */
   scan: ScanProgress | null
   playlists: Playlist[]
   connect(api: AuroraApi): () => void
@@ -36,6 +39,7 @@ export const useLibrary = create<LibraryStore>()((set, get) => {
     api: null,
     versions: { tracks: 0, folders: 0, playlists: 0, history: 0 },
     folders: [],
+    foldersLoaded: false,
     scan: null,
     playlists: [],
     connect(api) {
@@ -51,13 +55,18 @@ export const useLibrary = create<LibraryStore>()((set, get) => {
           if (scopes.includes('folders') || scopes.includes('tracks')) void get().refreshFolders()
           if (scopes.includes('playlists')) void get().refreshPlaylists()
         }),
-        api.on('library.scanProgress', (scan) => set({ scan })),
+        api.on('library.scanProgress', (scan) => set({ scan: scan.phase === 'done' ? null : scan })),
         api.on('engine.status', (s) => { if (s.state === 'ready') load() }),
       ]
       void api.status().then((s) => { if (s.state === 'ready') load() }).catch(() => {})
       return () => offs.forEach((off) => off())
     },
-    async refreshFolders() { const f = await run((a) => a.call('library.folders', {})); if (f) set({ folders: f }) },
+    async refreshFolders() {
+      const f = await run((a) => a.call('library.folders', {}))
+      if (!f) return
+      // A scan of a folder that's gone can't still be running (its end may never be reported).
+      set(({ scan }) => ({ folders: f, foldersLoaded: true, scan: scan && f.some((x) => x.id === scan.folderId) ? scan : null }))
+    },
     async refreshPlaylists() { const p = await run((a) => a.call('playlists.list', {})); if (p) set({ playlists: p }) },
     async addFolder() {
       const api = get().api

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, screen, within } from '@testing-library/react'
+import { act } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { album, fakeApi, renderAt, track } from './helpers'
 
@@ -14,6 +15,16 @@ describe('home', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Add a music folder' }))
     await vi.waitFor(() => expect(api.openFolder).toHaveBeenCalled())
     expect(screen.getByRole('button', { name: 'Open files' })).toBeTruthy()
+  })
+
+  it("doesn't show the empty state until the folder list has loaded", async () => {
+    let resolve: (f: unknown[]) => void = () => {}
+    const { api } = fakeApi({ 'library.folders': () => new Promise((r) => { resolve = r }) })
+    await renderAt('/', api)
+    await vi.waitFor(() => expect(api.call).toHaveBeenCalledWith('library.folders', {}))
+    expect(screen.queryByRole('button', { name: 'Add a music folder' })).toBeNull()
+    await act(async () => { resolve([]) })
+    expect(await screen.findByRole('button', { name: 'Add a music folder' })).toBeTruthy()
   })
 
   it('shows recently added albums and plays recently played tracks', async () => {
