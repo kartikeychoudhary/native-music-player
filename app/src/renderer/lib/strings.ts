@@ -2,6 +2,10 @@
 export const S = Object.freeze({
   app: 'aurora',
   nav: { home: 'Home', search: 'Search', albums: 'Albums', artists: 'Artists', genres: 'Genres', playlists: 'Playlists', queue: 'Queue', signal: 'Signal path', settings: 'Settings' },
+  nothingPlaying: 'Nothing playing',
+  openAurora: 'Open Aurora',
+  closeMini: 'Close mini-player',
+  miniPlayer: 'Mini-player',
   expandSidebar: 'Expand sidebar',
   collapseSidebar: 'Collapse sidebar',
   unknownArtist: 'Unknown artist',
@@ -111,6 +115,7 @@ export const S = Object.freeze({
     { keys: '↑ / ↓', action: 'Volume up / down' },
     { keys: 'Ctrl/Cmd + F', action: 'Search' },
     { keys: 'Ctrl/Cmd + ,', action: 'Settings' },
+    { keys: 'Ctrl/Cmd + M', action: 'Mini-player' },
   ] as { keys: string; action: string }[],
   about: 'About',
   licences: 'Aurora is MIT licensed. It includes Inter and JetBrains Mono (SIL OFL 1.1), Lucide icons (ISC), libopus (BSD) and, in builds with HE-AAC, the Fraunhofer FDK AAC library (see THIRD_PARTY_NOTICES.md).',

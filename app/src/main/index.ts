@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, net, protocol, screen, shell, webContents } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell, webContents } from 'electron'
 import { spawn } from 'node:child_process'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -8,12 +8,11 @@ import { ART_SCHEME, createArtHandler } from './artProtocol'
 import { engineArgs, resolveDataDir, usesSingleInstanceLock } from './engineArgs'
 import { enginePath } from './engine/enginePath'
 import { EngineSupervisor } from './engine/supervisor'
-import { createEventRelay } from './eventRelay'
 import { logDir, logger } from './logs'
-import { shouldBlockNavigation } from './navigation'
 import { safeSend } from './safeSend'
-import { boundsVisible, SettingsStore } from './settings'
+import { SettingsStore } from './settings'
 import { createVizHub, hookSender } from './viz'
+import { WindowManager } from './windows'
 
 protocol.registerSchemesAsPrivileged([{ scheme: ART_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }])
 
@@ -26,7 +25,7 @@ if (!app.isPackaged && process.env.AURORA_DATA_DIR) app.setPath('userData', proc
 const primary = !usesSingleInstanceLock({ isPackaged: app.isPackaged, env: process.env }) || app.requestSingleInstanceLock()
 if (!primary) app.quit()
 
-let win: BrowserWindow | null = null
+let windows: WindowManager
 let settings: SettingsStore
 let quitting = false
 
@@ -48,58 +47,20 @@ const viz = createVizHub({
 })
 const hookedSenders = new Set<number>()
 
-// Holds library notices (sent once, right after the engine starts) until the page has loaded.
-const relay = createEventRelay((event, payload) => safeSend(win, 'aurora:event', event, payload))
-const send = relay.send
-
-function saveBounds() {
-  if (!win || win.isDestroyed()) return
-  const b = win.getNormalBounds()
-  settings.update({ windowBounds: { ...b, maximized: win.isMaximized() } })
-}
-
-function createWindow() {
-  const mac = process.platform === 'darwin'
-  const saved = settings.get().windowBounds
-  const visible = saved && boundsVisible(saved, screen.getAllDisplays().map((d) => d.workArea))
-  win = new BrowserWindow({
-    width: 1280, height: 800, ...(visible ? { x: saved.x, y: saved.y, width: saved.width, height: saved.height } : {}),
-    minWidth: 940, minHeight: 600, show: false,
-    backgroundColor: '#17151A',
-    titleBarStyle: mac ? 'hiddenInset' : 'hidden',
-    titleBarOverlay: mac ? undefined : { color: '#100E12', symbolColor: '#EFE9E1', height: 36 },
-    webPreferences: { preload: join(__dirname, '../preload/index.js'), contextIsolation: true, nodeIntegration: false, sandbox: true },
-  })
-  if (visible && saved.maximized) win.maximize()
-  win.once('ready-to-show', () => win?.show())
-  win.on('close', saveBounds)
-  win.on('closed', () => { win = null; relay.reset() })
-  win.webContents.on('did-start-loading', relay.reset)
-  win.webContents.on('did-finish-load', relay.ready)
-  const devUrl = process.env.ELECTRON_RENDERER_URL
-  const page = join(__dirname, '../renderer/index.html')
-  const appUrl = devUrl ?? pathToFileURL(page).href
-  // The window only ever shows the app: no navigating away (e.g. to a dropped file), no new windows.
-  win.webContents.on('will-navigate', (e) => { if (shouldBlockNavigation(e.url, appUrl)) e.preventDefault() })
-  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-  if (devUrl) win.loadURL(devUrl)
-  else win.loadFile(page)
-}
-
-app.on('second-instance', () => {
-  if (!win) return
-  if (win.isMinimized()) win.restore()
-  win.show()
-  win.focus()
-})
+app.on('second-instance', () => { if (windows) windows.showMain() })
 
 app.whenReady().then(() => {
   if (!primary) return
   settings = new SettingsStore(join(app.getPath('userData'), 'settings.json'))
+  windows = new WindowManager({
+    settings, preload: join(__dirname, '../preload/index.js'), page: join(__dirname, '../renderer/index.html'), devUrl: process.env.ELECTRON_RENDERER_URL,
+    // Closing the main window quits on Windows/Linux even while the mini-player is open (spec §5.2).
+    onMainClosed: () => { if (process.platform !== 'darwin') app.quit() },
+  })
   const engineLog = logger('engine.log')
   supervisor.on('log', engineLog)
-  supervisor.on('notification', (m: string, p: unknown) => send(m, p))
-  supervisor.on('status', (s) => { engineLog(`[status] ${JSON.stringify(s)}`); send('engine.status', s) })
+  supervisor.on('notification', (m: string, p: unknown) => windows.send(m, p))
+  supervisor.on('status', (s) => { engineLog(`[status] ${JSON.stringify(s)}`); windows.send('engine.status', s) })
 
   supervisor.on('frame', (t: number, d: Uint8Array) => viz.frame(t, d))
   supervisor.on('status', (s) => { if (s.state === 'ready') viz.engineReady() })
@@ -116,30 +77,30 @@ app.whenReady().then(() => {
   ipcMain.handle('aurora:openFiles', async () => {
     const test = testEnv('AURORA_TEST_OPEN_FILES')
     if (test) return test.split(delimiter).filter(Boolean)
-    if (!win) return []
-    const r = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'], filters: [{ name: 'Audio', extensions: [...AUDIO_EXTENSIONS] }] })
+    if (!windows.main) return []
+    const r = await dialog.showOpenDialog(windows.main, { properties: ['openFile', 'multiSelections'], filters: [{ name: 'Audio', extensions: [...AUDIO_EXTENSIONS] }] })
     return r.canceled ? [] : r.filePaths
   })
   ipcMain.handle('aurora:openFolder', async () => {
     const test = testEnv('AURORA_TEST_OPEN_FOLDER')
     if (test) return test
-    if (!win) return null
-    const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'] })
+    if (!windows.main) return null
+    const r = await dialog.showOpenDialog(windows.main, { properties: ['openDirectory'] })
     return r.canceled ? null : r.filePaths[0] ?? null
   })
   ipcMain.handle('aurora:pickM3u', async () => {
     const test = testEnv('AURORA_TEST_OPEN_M3U')
     if (test) return test
-    if (!win) return null
-    const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: 'Playlists', extensions: ['m3u8', 'm3u'] }] })
+    if (!windows.main) return null
+    const r = await dialog.showOpenDialog(windows.main, { properties: ['openFile'], filters: [{ name: 'Playlists', extensions: ['m3u8', 'm3u'] }] })
     return r.canceled ? null : r.filePaths[0] ?? null
   })
   ipcMain.handle('aurora:pickM3uSave', async (_e, defaultName: unknown) => {
     const test = testEnv('AURORA_TEST_SAVE_M3U')
     if (test) return test
-    if (!win) return null
+    if (!windows.main) return null
     const name = typeof defaultName === 'string' ? defaultName.replace(/[\\/:*?"<>|]/g, '_') : 'Playlist'
-    const r = await dialog.showSaveDialog(win, { defaultPath: `${name}.m3u8`, filters: [{ name: 'Playlists', extensions: ['m3u8'] }] })
+    const r = await dialog.showSaveDialog(windows.main, { defaultPath: `${name}.m3u8`, filters: [{ name: 'Playlists', extensions: ['m3u8'] }] })
     return r.canceled ? null : r.filePath ?? null
   })
   ipcMain.handle('aurora:showItemInFolder', (_e, path: unknown) => {
@@ -154,11 +115,13 @@ app.whenReady().then(() => {
     viz.set(id, on === true)
     hookSender(e.sender, viz, hookedSenders)
   })
+  ipcMain.handle('aurora:toggleMini', () => windows.toggleMini())
+  ipcMain.handle('aurora:showMain', () => windows.showMain())
   ipcMain.handle('aurora:openLogs', async () => { await shell.openPath(logDir()) })
 
   supervisor.start()
-  createWindow()
-  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
+  windows.createMain()
+  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) windows.createMain() })
 })
 
 // Quit only after the engine has shut down cleanly (it writes session.json on the way out).
@@ -166,7 +129,7 @@ app.on('before-quit', (e) => {
   if (quitting || !primary) return
   e.preventDefault()
   quitting = true
-  saveBounds()
+  windows?.saveMainBounds()
   settings?.flush()
   void supervisor.stop().finally(() => app.quit())
 })

@@ -33,7 +33,7 @@ export function PlayerBar() {
       <div className={s.now}>
         <Artwork id={t?.artworkId ?? null} size={64} px={46} alt={t?.title ?? ''} />
         <div className={s.meta}>
-          <div className={s.title} data-testid="now-title">{t?.title ?? 'Nothing playing'}</div>
+          <div className={s.title} data-testid="now-title">{t?.title ?? S.nothingPlaying}</div>
           <div className={`${s.sub} muted`}>{sub}</div>
         </div>
         <button className={s.icon} aria-label={S.addCurrentToPlaylist} disabled={t?.trackId == null} onClick={like}><Heart size={16} /></button>

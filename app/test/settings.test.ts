@@ -12,7 +12,9 @@ describe('settings', () => {
 
   it('merges only valid known fields', () => {
     const s = mergeSettings(DEFAULT_SETTINGS, { sidebarExpanded: true, lastView: '/albums', extra: 1, windowBounds: { x: 1, y: 2, width: 900, height: 700, maximized: false } })
-    expect(s).toEqual({ sidebarExpanded: true, lastView: '/albums', windowBounds: { x: 1, y: 2, width: 900, height: 700, maximized: false } })
+    expect(s).toEqual({ ...DEFAULT_SETTINGS, sidebarExpanded: true, lastView: '/albums', windowBounds: { x: 1, y: 2, width: 900, height: 700, maximized: false } })
+    expect(mergeSettings(DEFAULT_SETTINGS, { miniBounds: { x: 5, y: -3 }, accentTint: true })).toMatchObject({ miniBounds: { x: 5, y: -3 }, accentTint: true })
+    expect(mergeSettings(DEFAULT_SETTINGS, { miniBounds: { x: 'a' }, accentTint: 'yes' })).toMatchObject({ miniBounds: null, accentTint: false })
     expect(mergeSettings(DEFAULT_SETTINGS, { sidebarExpanded: 'yes', lastView: 'http://evil', windowBounds: { width: 'big' } })).toEqual(DEFAULT_SETTINGS)
     expect(mergeSettings(DEFAULT_SETTINGS, { lastView: '/' + 'a'.repeat(300) }).lastView).toBe('/')
     expect(mergeSettings(DEFAULT_SETTINGS, null)).toEqual(DEFAULT_SETTINGS)

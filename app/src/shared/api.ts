@@ -152,6 +152,8 @@ export interface AuroraApi {
   status(): Promise<EngineStatus>
   restartEngine(): Promise<void>
   openLogs(): Promise<void>
+  toggleMini(): Promise<void>
+  showMain(): Promise<void>
   /** Turns this window's spectrum subscription on or off (main refcounts across windows). */
   setViz(on: boolean): void
   /** 64 spectrum bins (0-255) at up to 30 fps while subscribed. */

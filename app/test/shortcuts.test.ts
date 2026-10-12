@@ -91,6 +91,13 @@ describe('M2 shortcuts', () => {
     expect(go).toHaveBeenLastCalledWith('/settings')
   })
 
+  it('Ctrl/Cmd+M toggles the mini-player', () => {
+    const toggleMini = vi.fn()
+    const handled = handleShortcut(new KeyboardEvent('keydown', { key: 'm', ctrlKey: true }), { ...usePlayer.getState(), api: { toggleMini } as never }, 0)
+    expect(handled).toBe(true)
+    expect(toggleMini).toHaveBeenCalled()
+  })
+
   it('arrow up/down change volume, but not in bit-perfect mode or inside a grid', () => {
     handleShortcut(new KeyboardEvent('keydown', { key: 'ArrowUp' }), usePlayer.getState(), 0)
     expect(setVolume).toHaveBeenLastCalledWith(0.55)

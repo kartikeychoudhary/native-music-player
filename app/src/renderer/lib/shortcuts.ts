@@ -6,13 +6,14 @@ const INTERACTIVE = 'button, [role=switch], [role=slider], [role=grid], [role=li
 const SEEK_STEP_MS = 5000
 const VOLUME_STEP = 0.05
 
-/** Listed in Settings (spec §5.6). M3 adds Ctrl/Cmd+L (lyrics) and Ctrl/Cmd+M (mini-player). */
+/** Listed in Settings (spec §5.6). Ctrl/Cmd+M (mini-player) is listed; M3 adds Ctrl/Cmd+L (lyrics). */
 export const SHORTCUTS: { keys: string; action: string }[] = S.shortcutList
 
 /** Applies a global shortcut. Returns true when the event was handled. `go` navigates (Layout passes it). */
 export function handleShortcut(e: KeyboardEvent, store: PlayerStore, now: number, go?: (path: string) => void): boolean {
   if (e.defaultPrevented || e.altKey) return false
   if (e.ctrlKey || e.metaKey) {
+    if (e.key === 'm' || e.key === 'M') { e.preventDefault(); void store.api?.toggleMini(); return true }
     const target = e.key === 'f' || e.key === 'F' ? '/search' : e.key === ',' ? '/settings' : null
     if (!target || !go) return false
     e.preventDefault()

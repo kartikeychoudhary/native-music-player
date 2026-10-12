@@ -19,6 +19,8 @@ const api: AuroraApi = {
   status: () => ipcRenderer.invoke('aurora:status'),
   restartEngine: () => ipcRenderer.invoke('aurora:restartEngine'),
   openLogs: () => ipcRenderer.invoke('aurora:openLogs'),
+  toggleMini: () => ipcRenderer.invoke('aurora:toggleMini'),
+  showMain: () => ipcRenderer.invoke('aurora:showMain'),
   setViz: (on) => ipcRenderer.send('aurora:viz', on === true),
   onSpectrum: (cb) => {
     const handler = (_e: IpcRendererEvent, bins: Uint8Array) => cb(bins)
