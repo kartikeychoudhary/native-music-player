@@ -5,13 +5,36 @@ use lofty::prelude::*;
 use lofty::tag::ItemKey;
 use protocol::{Lyrics, LyricLine, LyricWord};
 
-/// UTF-8 (BOM stripped), or Latin-1 when the bytes aren't UTF-8 (common in older `.lrc` files).
+/// Windows-1252 for the bytes 0x80..=0x9F (the rest of the range matches Latin-1). The five
+/// undefined codes (0x81, 0x8D, 0x8F, 0x90, 0x9D) stay as the matching C1 control characters.
+const CP1252_HIGH: [char; 32] = [
+    '\u{20AC}', '\u{0081}', '\u{201A}', '\u{0192}', '\u{201E}', '\u{2026}', '\u{2020}', '\u{2021}',
+    '\u{02C6}', '\u{2030}', '\u{0160}', '\u{2039}', '\u{0152}', '\u{008D}', '\u{017D}', '\u{008F}',
+    '\u{0090}', '\u{2018}', '\u{2019}', '\u{201C}', '\u{201D}', '\u{2022}', '\u{2013}', '\u{2014}',
+    '\u{02DC}', '\u{2122}', '\u{0161}', '\u{203A}', '\u{0153}', '\u{009D}', '\u{017E}', '\u{0178}',
+];
+
+/// UTF-8 (BOM stripped), UTF-16 when it starts with a BOM, or Windows-1252 when the bytes aren't
+/// UTF-8 (common in older `.lrc` files).
 pub fn decode_text(bytes: &[u8]) -> String {
+    if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
+        return decode_utf16(rest, u16::from_le_bytes);
+    }
+    if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
+        return decode_utf16(rest, u16::from_be_bytes);
+    }
     let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
     match std::str::from_utf8(bytes) {
         Ok(s) => s.to_string(),
-        Err(_) => bytes.iter().map(|&b| b as char).collect(),
+        Err(_) => bytes.iter().map(|&b| if (0x80..=0x9F).contains(&b) { CP1252_HIGH[(b - 0x80) as usize] } else { b as char }).collect(),
     }
+}
+
+/// Lossy UTF-16 decode (unpaired surrogates become U+FFFD; a trailing odd byte is dropped).
+fn decode_utf16(bytes: &[u8], unit: fn([u8; 2]) -> u16) -> String {
+    char::decode_utf16(bytes.chunks_exact(2).map(|c| unit([c[0], c[1]])))
+        .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER))
+        .collect()
 }
 
 /// `mm:ss`, `mm:ss.f+` or `mm:ss:f+` → milliseconds.
@@ -210,6 +233,26 @@ mod tests {
         assert_eq!(times(&l), [(Some(1000), "one"), (Some(3000), ""), (Some(5000), "five")], "an empty timed line is a pause");
         assert_eq!(decode_text(&[b'[', b'0', b'0', b':', b'0', b'1', b']', 0xE9, b't', 0xE9]), "[00:01]été", "Latin-1 fallback");
         assert_eq!(decode_text("\u{feff}abc".as_bytes()), "abc");
+    }
+
+    #[test]
+    fn decode_maps_windows_1252_punctuation() {
+        assert_eq!(decode_text(b"don\x92t"), "don\u{2019}t");
+        assert_eq!(decode_text(b"\x93hi\x94 \x85 a\x96b \x80"), "\u{201C}hi\u{201D} \u{2026} a\u{2013}b \u{20AC}");
+        assert_eq!(decode_text(b"caf\xE9"), "caf\u{e9}", "bytes outside 0x80-0x9F stay Latin-1");
+    }
+
+    #[test]
+    fn decode_handles_utf16_with_a_bom() {
+        let units: Vec<u16> = "[00:01.00]hi \u{2019}".encode_utf16().collect();
+        let le: Vec<u8> = [0xFF, 0xFE].into_iter().chain(units.iter().flat_map(|u| u.to_le_bytes())).collect();
+        let be: Vec<u8> = [0xFE, 0xFF].into_iter().chain(units.iter().flat_map(|u| u.to_be_bytes())).collect();
+        assert_eq!(decode_text(&le), "[00:01.00]hi \u{2019}");
+        assert_eq!(decode_text(&be), "[00:01.00]hi \u{2019}");
+        let l = parse_lrc(&decode_text(&le)).expect("synced");
+        assert_eq!(times(&l), [(Some(1000), "hi \u{2019}")]);
+        let lone: Vec<u8> = vec![0xFF, 0xFE, 0x00, 0xD8, b'a', 0x00, 0x41];
+        assert_eq!(decode_text(&lone), "\u{FFFD}a", "bad surrogates are replaced, a trailing odd byte is dropped");
     }
 
     #[test]
