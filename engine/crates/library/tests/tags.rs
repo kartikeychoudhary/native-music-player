@@ -94,3 +94,20 @@ fn empty_and_dsd_files_are_errors_for_lofty() {
     assert!(tags::read(&common::fixture("empty.mp3")).is_err());
     assert!(tags::read(&common::fixture("dsd64.dsf")).is_err(), "DSD tags are read through the fallback probe");
 }
+
+#[test]
+fn opus_r128_gains_become_replay_gain_values() {
+    use lofty::config::{ParseOptions, WriteOptions};
+    use lofty::file::AudioFile;
+    use lofty::ogg::OpusFile;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("r128.opus");
+    std::fs::copy(common::fixture("opus_160.opus"), &path).unwrap();
+    let mut f = OpusFile::read_from(&mut std::fs::File::open(&path).unwrap(), ParseOptions::new()).unwrap();
+    f.vorbis_comments_mut().insert("R128_TRACK_GAIN".into(), "-2560".into()); // -10 dB vs -23 LUFS
+    f.vorbis_comments_mut().insert("R128_ALBUM_GAIN".into(), "256".into());
+    f.save_to_path(&path, WriteOptions::default()).unwrap();
+    let rg = library::tags::read(&path).unwrap().replay_gain;
+    assert_eq!((rg.track_gain, rg.album_gain), (Some(-5.0), Some(6.0)), "+5 dB to the ReplayGain reference");
+    assert_eq!(rg.track_peak, None);
+}

@@ -1,6 +1,7 @@
 use protocol::*;
 
 use crate::decode::{source_summary, SourceInfo};
+use crate::dsp::replaygain::{RgDecision, RgSource};
 use crate::output::StreamInfo;
 use crate::player::pipeline::{Passthrough, PipelinePlan};
 
@@ -55,6 +56,21 @@ pub fn build_signal_path(src: &SourceInfo, plan: &PipelinePlan, stream: &StreamI
         underruns,
         notes: plan.notes.clone(),
     }
+}
+
+/// The ReplayGain stage (spec §3.6). `dsp_allowed` is false in bit-perfect mode, which disables all DSP.
+pub fn rg_stage(d: &RgDecision, mode: ReplayGainMode, dsp_allowed: bool) -> Stage {
+    let detail = if !dsp_allowed {
+        "bypassed (bit-perfect)".into()
+    } else if mode == ReplayGainMode::Off {
+        "off".into()
+    } else {
+        match d.source {
+            None => "no ReplayGain data".into(),
+            Some(src) => format!("{:+.1} dB ({}){}", d.db, if src == RgSource::Track { "track" } else { "album" }, if d.limited { ", peak-limited" } else { "" }),
+        }
+    };
+    Stage { kind: StageKind::ReplayGain, active: dsp_allowed && d.source.is_some() && d.db != 0.0, detail }
 }
 
 /// The EQ stage (spec §3.8). `dsp_allowed` is false in bit-perfect mode, which disables all DSP.

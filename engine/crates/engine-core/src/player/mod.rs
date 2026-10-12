@@ -15,6 +15,7 @@ use protocol::*;
 
 use crate::decode::{self, DecodeError, TrackDecoder};
 use crate::dsp::eq::EqShared;
+use crate::dsp::replaygain::{decide, RgDecision};
 use crate::dsp::resample::StreamResampler;
 use crate::dsp::volume::volume_gain;
 use crate::output::format::OutputFormat;
@@ -23,7 +24,7 @@ use crate::output::{DeviceCaps, OutputBackend, OutputError, OutputStream, Stream
 use chain::ProcessChain;
 use pipeline::{plan_output, Passthrough, PipelinePlan, PlanInput, EXCLUSIVE_UNAVAILABLE};
 pub use queue::{Entry, NewEntry, Queue};
-use signal_path::{build_signal_path, eq_stage};
+use signal_path::{build_signal_path, eq_stage, rg_stage};
 
 const MIN_FREE_BYTES: usize = 16 * 1024;
 /// "Played" after half the track or this much listening, whichever comes first.
@@ -47,6 +48,7 @@ pub enum Command {
     Play(Option<u32>), Pause, Toggle, Stop, Next, Prev,
     Seek(u64), SetVolume(f32), SetMode(OutputMode), SetDevice(Option<String>), Shutdown,
     SetEq(EqSettings),
+    SetReplayGain(ReplayGainMode),
 }
 
 /// A saved session (spec §5.2). The player restores it paused; the first Play opens the stream.
@@ -168,6 +170,7 @@ struct Player {
     /// Published to every stream's callback; only the player thread writes it (single writer).
     eq: Arc<EqShared>,
     eq_settings: EqSettings,
+    rg_mode: ReplayGainMode,
     device: Option<String>,
     active: Option<Active>,
     feeding: Option<Feeding>,
@@ -213,7 +216,7 @@ impl Player {
         let devices = backend.devices().unwrap_or_default();
         Self {
             backend, events, shared_state, queue: Queue::new(seed), cur: 0, status: PlaybackStatus::Stopped,
-            volume: 1.0, mode: OutputMode::Processed, eq: Arc::new(EqShared::new()), eq_settings: EqSettings::default(), device: None, active: None, feeding: None, prepared: None,
+            volume: 1.0, mode: OutputMode::Processed, eq: Arc::new(EqShared::new()), eq_settings: EqSettings::default(), rg_mode: ReplayGainMode::Off, device: None, active: None, feeding: None, prepared: None,
             prepare_failed: None, markers: VecDeque::new(), reopen: None, pending_start: false, exclusive_denied: None, last_excl_caps: None, end_pending: false, queue_current: None, shown_idx: None, resume_ms: None,
             last_tick: Instant::now(), last_underruns: (0, Instant::now()), last_devices: (devices, Instant::now()),
             buffer_secs: cfg.buffer_secs, underrun_times: VecDeque::new(), cfg,
@@ -313,6 +316,16 @@ impl Player {
             Command::SetEq(s) => {
                 self.eq.publish(s.enabled, &s.bands, s.preamp);
                 self.eq_settings = s;
+                self.refresh_dsp_stages();
+            }
+            Command::SetReplayGain(mode) => {
+                self.rg_mode = mode;
+                // The gain is baked in when audio is decoded, so already-buffered audio is redone from the audible position.
+                if self.dsp_allowed() && self.active.is_some() && self.status != PlaybackStatus::Stopped {
+                    let ms = self.position_ms();
+                    self.fade_out();
+                    self.seek(ms);
+                }
                 self.refresh_dsp_stages();
             }
             Command::Shutdown => {}
@@ -498,9 +511,15 @@ impl Player {
     /// DSP is allowed only in processed mode (spec §3.5: bit-perfect disables ReplayGain, EQ and crossfade).
     fn dsp_allowed(&self) -> bool { self.mode == OutputMode::Processed }
 
-    /// The DSP stages of the signal path, in chain order.
-    fn dsp_stages(&self, dsp_allowed: bool) -> Vec<Stage> {
-        vec![eq_stage(&self.eq_settings, dsp_allowed)]
+    /// The ReplayGain decision for queue entry `idx` under the current mode (none when DSP is off).
+    fn rg_for(&self, idx: usize) -> RgDecision {
+        if !self.dsp_allowed() { return RgDecision::NONE; }
+        self.queue.get(idx).map_or(RgDecision::NONE, |e| decide(self.rg_mode, &e.replay_gain))
+    }
+
+    /// The DSP stages of queue entry `idx`'s signal path, in chain order.
+    fn dsp_stages(&self, idx: usize, dsp_allowed: bool) -> Vec<Stage> {
+        vec![rg_stage(&self.rg_for(idx), self.rg_mode, dsp_allowed), eq_stage(&self.eq_settings, dsp_allowed)]
     }
 
     /// Rewrites the DSP stages of every held track's signal path after a setting changed. Tracks decoded
@@ -508,7 +527,7 @@ impl Player {
     /// audible track's signal path is sent now.
     fn refresh_dsp_stages(&mut self) {
         let allowed = self.dsp_allowed();
-        let fresh: Vec<Vec<Stage>> = self.markers.iter().map(|_| self.dsp_stages(allowed)).collect();
+        let fresh: Vec<Vec<Stage>> = self.markers.iter().map(|m| self.dsp_stages(m.idx, allowed)).collect();
         for (m, fresh) in self.markers.iter_mut().zip(fresh) {
             m.signal.stages.retain(|s| !matches!(s.kind, StageKind::ReplayGain | StageKind::Eq | StageKind::Crossfade));
             let at = m.signal.stages.iter().position(|s| s.kind == StageKind::Volume).unwrap_or(m.signal.stages.len());
@@ -662,7 +681,7 @@ impl Player {
     }
 
     fn begin_feeding(&mut self, idx: usize, dec: Box<dyn TrackDecoder>, plan: PipelinePlan, start_ms: u64, reuse: Option<StreamResampler>) {
-        let dsp = self.dsp_stages(self.dsp_allowed());
+        let dsp = self.dsp_stages(idx, self.dsp_allowed());
         let a = self.active.as_ref().expect("stream open before feeding");
         let info = dec.info().clone();
         let signal = build_signal_path(&info, &plan, &a.info, self.effective_volume(), a.bluetooth.clone(), a.shared.underruns.load(Relaxed), dsp);
@@ -671,7 +690,8 @@ impl Player {
             duration_ms: info.total_frames.map(|f| f * 1000 / info.spec.sample_rate.max(1) as u64),
             listened_carry_ms: 0, reported: false,
         });
-        let chain = ProcessChain::new(plan, info.spec, reuse);
+        let mut chain = ProcessChain::new(plan, info.spec, reuse);
+        chain.set_gain(self.rg_for(idx).linear());
         self.feeding = Some(Feeding { idx, dec, chain, decoded: start_ms * info.spec.sample_rate as u64 / 1000, eof: false });
     }
 

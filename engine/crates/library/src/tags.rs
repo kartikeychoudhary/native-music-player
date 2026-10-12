@@ -157,7 +157,24 @@ pub fn read(path: &Path) -> Result<TrackTags, TagError> {
     };
     let mut out = TrackTags::from_props(props, path);
     if let Some(tag) = tf.primary_tag().or_else(|| tf.first_tag()) { fill(&mut out, tag); }
+    if tf.file_type() == FileType::Opus && out.replay_gain.track_gain.is_none() && out.replay_gain.album_gain.is_none() {
+        r128(path, &mut out.replay_gain);
+    }
     Ok(out)
+}
+
+/// Opus stores loudness as `R128_TRACK_GAIN`/`R128_ALBUM_GAIN`: Q7.8 dB relative to −23 LUFS.
+/// ReplayGain's reference is −18 LUFS, so the ReplayGain value is the R128 value + 5 dB.
+fn r128(path: &Path, rg: &mut ReplayGainInfo) {
+    use lofty::config::ParseOptions;
+    use lofty::file::AudioFile;
+    use lofty::ogg::OpusFile;
+    let Ok(mut f) = std::fs::File::open(path) else { return };
+    let Ok(opus) = OpusFile::read_from(&mut f, ParseOptions::new()) else { return };
+    let vc = opus.vorbis_comments();
+    let q = |key: &str| vc.get(key).and_then(|v| v.trim().parse::<i32>().ok()).map(|q| q as f32 / 256.0 + 5.0);
+    rg.track_gain = q("R128_TRACK_GAIN");
+    rg.album_gain = q("R128_ALBUM_GAIN");
 }
 
 #[cfg(test)]

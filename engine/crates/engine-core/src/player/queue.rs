@@ -15,6 +15,10 @@ pub struct NewEntry {
     pub album: Option<String>,
     pub artwork_id: Option<i64>,
     pub duration_ms: Option<u64>,
+    pub album_id: Option<i64>,
+    pub disc_no: Option<u32>,
+    pub track_no: Option<u32>,
+    pub replay_gain: protocol::ReplayGainInfo,
 }
 
 impl NewEntry {
@@ -31,6 +35,10 @@ pub struct Entry {
     pub album: Option<String>,
     pub artwork_id: Option<i64>,
     pub duration_ms: Option<u64>,
+    pub album_id: Option<i64>,
+    pub disc_no: Option<u32>,
+    pub track_no: Option<u32>,
+    pub replay_gain: protocol::ReplayGainInfo,
 }
 
 impl Entry {
@@ -75,7 +83,8 @@ impl Queue {
                 let id = self.next_id;
                 self.next_id += 1;
                 let title = n.title.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| stem(&n.path));
-                Entry { id, path: n.path, title, track_id: n.track_id, artist: n.artist, album: n.album, artwork_id: n.artwork_id, duration_ms: n.duration_ms }
+                Entry { id, path: n.path, title, track_id: n.track_id, artist: n.artist, album: n.album, artwork_id: n.artwork_id, duration_ms: n.duration_ms,
+                    album_id: n.album_id, disc_no: n.disc_no, track_no: n.track_no, replay_gain: n.replay_gain }
             })
             .collect()
     }

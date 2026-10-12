@@ -485,3 +485,57 @@ fn eq_stage_change_reaches_a_track_that_is_queued_but_not_yet_audible() {
         assert_eq!((st.active, st.detail.as_str()), (true, "Bass"));
     }
 }
+
+fn rg_entry(name: &str, track_gain: f32) -> engine_core::player::NewEntry {
+    engine_core::player::NewEntry {
+        replay_gain: ReplayGainInfo { track_gain: Some(track_gain), track_peak: Some(0.125), ..Default::default() },
+        ..engine_core::player::NewEntry::from_path(fixture(name))
+    }
+}
+
+#[test]
+fn replay_gain_scales_processed_output_and_follows_the_mode() {
+    let (p, h, rx) = setup(OutputMode::Processed);
+    p.send(Command::SetReplayGain(ReplayGainMode::Track));
+    p.send(Command::SetQueue { items: vec![rg_entry("flac16_44k.flac", -6.0206)], start: 0 });
+    p.send(Command::Play(None));
+    let events = run_to_end(&h, &rx);
+    let half = read_f32le("pcm16_44k.f32le").iter().map(|v| v * 0.5).collect::<Vec<f32>>();
+    let got = f32s(&h.recorded());
+    assert_eq!(got.len(), half.len());
+    assert!(got.iter().zip(&half).all(|(a, b)| (a - b).abs() < 1e-5), "-6.02 dB = half amplitude");
+    let st = events.iter().filter_map(|e| if let PlayerEvent::SignalPath(s) = e { s.stages.iter().find(|s| s.kind == StageKind::ReplayGain).cloned() } else { None }).next_back().unwrap();
+    assert_eq!((st.active, st.detail.as_str()), (true, "-6.0 dB (track)"));
+}
+
+#[test]
+fn switching_replay_gain_mode_mid_track_is_heard_at_once() {
+    let (p, h, rx) = setup(OutputMode::Processed);
+    p.send(Command::SetQueue { items: vec![rg_entry("flac16_44k.flac", -6.0206)], start: 0 });
+    p.send(Command::Play(None));
+    pull_frames(&h, 22_050);
+    std::thread::sleep(Duration::from_millis(200));
+    let before = peak(&h.recorded());
+    p.send(Command::SetReplayGain(ReplayGainMode::Track));
+    let start = Instant::now();
+    while !rx.try_iter().any(|e| matches!(e, PlayerEvent::SignalPath(s) if s.stages.iter().any(|st| st.kind == StageKind::ReplayGain && st.active))) {
+        assert!(start.elapsed() < Duration::from_secs(5));
+        pull_frames(&h, 256);
+    }
+    h.clear_recorded();
+    pull_frames(&h, 8_820);
+    let after = f32s(&h.recorded());
+    let tail_peak = after[after.len() / 2..].iter().fold(0f32, |m, v| m.max(v.abs()));
+    assert!((tail_peak / before - 0.5).abs() < 0.03, "x{:.3}", tail_peak / before);
+}
+
+#[test]
+fn bit_perfect_ignores_replay_gain() {
+    let (p, h, rx) = setup(OutputMode::BitPerfect);
+    p.send(Command::SetReplayGain(ReplayGainMode::Track));
+    p.send(Command::SetQueue { items: vec![rg_entry("flac24_96k.flac", -6.0)], start: 0 });
+    p.send(Command::Play(None));
+    run_to_end(&h, &rx);
+    let expected: Vec<u8> = read_s32le("pcm24_96k.s32le").iter().flat_map(|s| (s >> 8).to_le_bytes()[..3].to_vec()).collect();
+    assert_eq!(h.recorded(), expected);
+}

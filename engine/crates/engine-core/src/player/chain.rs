@@ -13,6 +13,7 @@ pub struct ProcessChain {
     f: Vec<f64>,
     mapped: Vec<f64>,
     resampled: Vec<f64>,
+    gain: f64,
 }
 
 impl ProcessChain {
@@ -24,11 +25,14 @@ impl ProcessChain {
                 _ => StreamResampler::new(want.0, want.1, want.2).expect("resampler config from plan_output must be valid"),
             }
         });
-        Self { plan, src, resampler, dither: Ditherer::new(0x5EED), f: vec![], mapped: vec![], resampled: vec![] }
+        Self { plan, src, resampler, dither: Ditherer::new(0x5EED), f: vec![], mapped: vec![], resampled: vec![], gain: 1.0 }
     }
 
     pub fn plan(&self) -> &PipelinePlan { &self.plan }
     pub fn take_resampler(&mut self) -> Option<StreamResampler> { self.resampler.take() }
+
+    /// Linear gain (ReplayGain) applied to processed samples after resampling; passthrough ignores it.
+    pub fn set_gain(&mut self, linear: f64) { self.gain = linear; }
 
     pub fn process(&mut self, block: &PcmBlock, out: &mut Vec<u8>) {
         debug_assert_eq!(block.spec.channels, self.src.channels);
@@ -41,10 +45,11 @@ impl ProcessChain {
         block.to_f64(&mut self.f);
         self.mapped.clear();
         self.plan.channel_map.apply(&self.f, &mut self.mapped);
-        let samples: &[f64] = match self.resampler.as_mut() {
-            Some(r) => { self.resampled.clear(); r.process(&self.mapped, &mut self.resampled); &self.resampled }
-            None => &self.mapped,
+        let samples: &mut Vec<f64> = match self.resampler.as_mut() {
+            Some(r) => { self.resampled.clear(); r.process(&self.mapped, &mut self.resampled); &mut self.resampled }
+            None => &mut self.mapped,
         };
+        if self.gain != 1.0 { for s in samples.iter_mut() { *s *= self.gain; } }
         let dither = self.plan.dither.then_some(&mut self.dither);
         write_f64(samples, self.plan.format.sample, dither, out);
     }
@@ -53,6 +58,7 @@ impl ProcessChain {
         if let Some(r) = self.resampler.as_mut() {
             self.resampled.clear();
             r.flush(&mut self.resampled);
+            if self.gain != 1.0 { for s in self.resampled.iter_mut() { *s *= self.gain; } }
             let dither = self.plan.dither.then_some(&mut self.dither);
             write_f64(&self.resampled, self.plan.format.sample, dither, out);
         }

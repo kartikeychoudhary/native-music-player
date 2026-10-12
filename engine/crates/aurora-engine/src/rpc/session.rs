@@ -64,13 +64,16 @@ pub fn load(dir: &Path) -> Option<Session> {
     }
 }
 
-pub fn restore(s: Session) -> Option<Restore> {
+/// Rebuilds the saved queue; `enrich` then fills in what the session doesn't store (album order, ReplayGain).
+pub fn restore(s: Session, enrich: impl FnOnce(&mut [NewEntry])) -> Option<Restore> {
     if s.items.is_empty() { return None; }
+    let mut items: Vec<NewEntry> = s.items.into_iter().map(|i| NewEntry {
+        path: PathBuf::from(i.path), title: Some(i.title), track_id: i.track_id, artist: i.artist,
+        album: i.album, artwork_id: i.artwork_id, duration_ms: i.duration_ms, ..Default::default()
+    }).collect();
+    enrich(&mut items);
     Some(Restore {
-        items: s.items.into_iter().map(|i| NewEntry {
-            path: PathBuf::from(i.path), title: Some(i.title), track_id: i.track_id, artist: i.artist,
-            album: i.album, artwork_id: i.artwork_id, duration_ms: i.duration_ms,
-        }).collect(),
+        items,
         current: s.current,
         position_ms: s.position_ms,
         shuffle: s.shuffle,
@@ -102,7 +105,7 @@ mod tests {
         assert!(!dir.path().join(format!("{FILE}.tmp")).exists());
         let loaded = load(dir.path()).unwrap();
         assert_eq!(loaded, s);
-        let r = restore(loaded).unwrap();
+        let r = restore(loaded, |_| {}).unwrap();
         assert_eq!((r.current, r.position_ms, r.shuffle, r.repeat, r.volume, r.mode), (1, 4_200, true, RepeatMode::All, 0.7, OutputMode::BitPerfect));
         assert_eq!(r.items[1].path, std::path::PathBuf::from("/m/b.flac"));
         assert_eq!((r.items[1].track_id, r.items[1].title.as_deref(), r.items[1].duration_ms), (Some(20), Some("t2"), Some(1000)));
@@ -135,6 +138,6 @@ mod tests {
     #[test]
     fn empty_queue_restores_nothing() {
         let s = snapshot(&QueueChanged { items: vec![], current: None }, &PlayerState::default());
-        assert!(restore(s).is_none());
+        assert!(restore(s, |_| {}).is_none());
     }
 }

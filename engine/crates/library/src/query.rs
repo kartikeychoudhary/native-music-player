@@ -9,6 +9,10 @@ use rusqlite::{params_from_iter, Connection, OptionalExtension};
 use crate::rows::{self, ALBUM_COLS, ALBUM_FROM, ARTIST_COLS, GENRE_COLS, TRACK_COLS};
 use crate::{LibError, Library, Result};
 
+/// Per-track data the player needs that list rows don't carry.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct QueueMeta { pub album_id: Option<i64>, pub disc_no: Option<u32>, pub track_no: Option<u32>, pub replay_gain: ReplayGainInfo }
+
 pub const DEFAULT_LIMIT: u32 = 100;
 pub const MAX_LIMIT: u32 = 1000;
 
@@ -67,6 +71,25 @@ fn track_order(q: &ListQuery, by_album: bool) -> String {
 }
 
 impl Library {
+    /// Per-track data the player needs that list rows don't carry (album order for crossfade smart
+    /// skip, ReplayGain). Ids that don't exist are left out.
+    pub fn queue_meta(&self, ids: &[i64]) -> Result<HashMap<i64, QueueMeta>> {
+        let conn = self.conn();
+        let mut out = HashMap::new();
+        for chunk in ids.chunks(500) {
+            let marks = vec!["?"; chunk.len()].join(",");
+            let mut stmt = conn.prepare(&format!(
+                "SELECT id, album_id, disc_no, track_no, rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak FROM tracks WHERE id IN ({marks})"
+            ))?;
+            let rows = stmt.query_map(params_from_iter(chunk.iter()), |r| Ok((r.get::<_, i64>(0)?, QueueMeta {
+                album_id: r.get(1)?, disc_no: r.get(2)?, track_no: r.get(3)?,
+                replay_gain: ReplayGainInfo { track_gain: r.get(4)?, track_peak: r.get(5)?, album_gain: r.get(6)?, album_peak: r.get(7)? },
+            })))?;
+            for row in rows { let (id, m) = row?; out.insert(id, m); }
+        }
+        Ok(out)
+    }
+
     pub fn albums(&self, q: &ListQuery) -> Result<Page<AlbumRow>> {
         let f = q.filter.clone().unwrap_or_default();
         let mut w = Filter::new("a.track_count > 0");

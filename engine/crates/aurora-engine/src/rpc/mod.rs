@@ -94,9 +94,6 @@ pub fn run(opts: RunOptions) -> i32 {
     let (tx, rx) = crossbeam_channel::unbounded::<PlayerEvent>();
     let player = spawn_player(backend.clone(), PlayerConfig::default(), tx);
     let queue = Arc::new(Mutex::new(QueueChanged { items: vec![], current: None }));
-    if let Some(dir) = &opts.data_dir && let Some(r) = session::load(dir).and_then(session::restore) {
-        player.send(Command::Restore(Box::new(r)));
-    }
     let (library, library_error) = match &opts.data_dir {
         Some(dir) => match LibraryService::open(dir, out.clone(), fallback_probe()) {
             Ok(s) => (Some(Arc::new(s)), None),
@@ -104,6 +101,10 @@ pub fn run(opts: RunOptions) -> i32 {
         },
         None => (None, None),
     };
+    // The library opens first so a restored queue can pick up album order and ReplayGain from it.
+    if let Some(dir) = &opts.data_dir && let Some(r) = session::load(dir).and_then(|s| session::restore(s, |items| if let Some(svc) = &library { dispatch::enrich(svc, items) })) {
+        player.send(Command::Restore(Box::new(r)));
+    }
 
     out.notify("engine.ready", EngineReady { version: env!("CARGO_PKG_VERSION").into(), protocol_version: PROTOCOL_VERSION, features: features() });
     if let Some(e) = &library_error { notify_error(&out, e.code(), format!("Library unavailable: {e}")); }

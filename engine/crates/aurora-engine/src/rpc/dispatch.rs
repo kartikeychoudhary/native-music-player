@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use engine_core::output::OutputBackend;
 use engine_core::player::{Command, NewEntry, PlayerHandle};
 use protocol::rpc::*;
-use protocol::{ErrorCode, QueueChanged, TrackRow};
+use protocol::{ErrorCode, QueueChanged, ReplayGainInfo, TrackRow};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
@@ -30,7 +30,7 @@ pub(super) fn params<T: DeserializeOwned>(v: Value) -> Result<T, RpcError> {
 }
 
 /// A queue entry carrying the library's metadata for `t`.
-pub fn entry_from_row(t: TrackRow) -> NewEntry {
+pub fn entry_from_row(t: TrackRow, replay_gain: ReplayGainInfo) -> NewEntry {
     NewEntry {
         path: PathBuf::from(t.path),
         title: Some(t.title),
@@ -39,12 +39,32 @@ pub fn entry_from_row(t: TrackRow) -> NewEntry {
         album: (!t.album.is_empty()).then_some(t.album),
         artwork_id: t.artwork_id,
         duration_ms: t.duration_ms,
+        album_id: t.album_id,
+        disc_no: t.disc_no,
+        track_no: t.track_no,
+        replay_gain,
     }
 }
 
 fn entries_for(ctx: &Ctx, ids: &[i64]) -> Result<Vec<NewEntry>, RpcError> {
     let svc = ctx.library.as_deref().ok_or_else(|| unavailable(ctx.library_error.as_deref()))?;
-    Ok(svc.lib.tracks_by_ids(ids).map_err(lib_err)?.into_iter().map(entry_from_row).collect())
+    let meta = svc.lib.queue_meta(ids).map_err(lib_err)?;
+    // A queue can hold the same track twice, so every copy reads the map (no `remove`).
+    Ok(svc.lib.tracks_by_ids(ids).map_err(lib_err)?.into_iter().map(|t| {
+        let rg = meta.get(&t.id).map(|m| m.replay_gain.clone()).unwrap_or_default();
+        entry_from_row(t, rg)
+    }).collect())
+}
+
+/// Fills in what a saved session doesn't store (album order, ReplayGain) from the library.
+pub fn enrich(svc: &LibraryService, items: &mut [NewEntry]) {
+    let ids: Vec<i64> = items.iter().filter_map(|e| e.track_id).collect();
+    let Ok(meta) = svc.lib.queue_meta(&ids) else { return };
+    for e in items.iter_mut() {
+        if let Some(m) = e.track_id.and_then(|id| meta.get(&id)) {
+            (e.album_id, e.disc_no, e.track_no, e.replay_gain) = (m.album_id, m.disc_no, m.track_no, m.replay_gain.clone());
+        }
+    }
 }
 
 fn queue_len(ctx: &Ctx) -> usize { ctx.queue.lock().unwrap_or_else(|p| p.into_inner()).items.len() }
@@ -114,8 +134,20 @@ mod tests {
             bitrate_kbps: None, sample_rate: None, bit_depth: None, channels: None, artwork_id: Some(3), missing: false, unplayable: None,
             play_count: 0, added_at: 0, last_played_at: None,
         };
-        let e = entry_from_row(row);
+        let e = entry_from_row(row, ReplayGainInfo::default());
         assert_eq!((e.track_id, e.artist, e.album.as_deref(), e.artwork_id, e.duration_ms), (Some(7), None, Some("Al"), Some(3), Some(5)));
         assert_eq!(e.title.as_deref(), Some("A"));
+    }
+
+    #[test]
+    fn entries_carry_album_order_and_replay_gain() {
+        let row = TrackRow {
+            id: 4, path: "/m/a.flac".into(), title: "A".into(), artist: "X".into(), artist_id: None, album: "Al".into(), album_id: Some(9),
+            album_artist: None, track_no: Some(3), disc_no: Some(1), year: None, genre: None, duration_ms: Some(1000), codec: None,
+            container: "flac".into(), bitrate_kbps: None, sample_rate: None, bit_depth: None, channels: None, artwork_id: None,
+            missing: false, unplayable: None, play_count: 0, added_at: 0, last_played_at: None,
+        };
+        let e = entry_from_row(row, ReplayGainInfo { track_gain: Some(-3.0), ..Default::default() });
+        assert_eq!((e.album_id, e.disc_no, e.track_no, e.replay_gain.track_gain), (Some(9), Some(1), Some(3), Some(-3.0)));
     }
 }

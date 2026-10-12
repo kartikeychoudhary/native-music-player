@@ -148,3 +148,22 @@ fn oversized_limits_are_clamped_not_errors() {
     assert_eq!(s.lib.tracks(&ListQuery { limit: Some(50_000), ..Default::default() }).unwrap().items.len(), 6);
     assert_eq!(s.lib.tracks(&ListQuery { limit: Some(0), ..Default::default() }).unwrap().items.len(), 1);
 }
+
+#[test]
+fn queue_meta_carries_album_order_and_replay_gain() {
+    use lofty::tag::ItemKey;
+    let s = common::scanned(|root| {
+        common::tagged("flac16_44k.flac", &root.join("A/01.flac"), &common::Tags {
+            title: Some("One"), album: Some("Al"), track: Some(1), disc: Some(2),
+            extra: &[(ItemKey::ReplayGainTrackGain, "-6.40 dB"), (ItemKey::ReplayGainTrackPeak, "0.988")],
+            ..Default::default()
+        });
+    });
+    let id = s.id_of("One");
+    let meta = s.lib.queue_meta(&[id, 999_999]).unwrap();
+    assert_eq!(meta.len(), 1, "unknown ids are absent");
+    let m = &meta[&id];
+    assert_eq!((m.disc_no, m.track_no), (Some(2), Some(1)));
+    assert!(m.album_id.is_some());
+    assert_eq!((m.replay_gain.track_gain, m.replay_gain.track_peak), (Some(-6.4), Some(0.988)));
+}
