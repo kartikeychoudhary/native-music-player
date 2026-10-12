@@ -2,6 +2,7 @@ pub mod chain;
 pub mod pipeline;
 pub mod queue;
 pub mod signal_path;
+mod tail;
 pub mod viz;
 
 use std::collections::VecDeque;
@@ -27,6 +28,7 @@ use chain::ProcessChain;
 use pipeline::{plan_output, Passthrough, PipelinePlan, PlanInput, EXCLUSIVE_UNAVAILABLE};
 pub use queue::{Entry, NewEntry, Queue};
 use signal_path::{build_signal_path, crossfade_stage, eq_stage, rg_stage};
+use tail::TailBuffer;
 
 const MIN_FREE_BYTES: usize = 16 * 1024;
 /// A crossfade starts this long before its overlap would, so the outgoing tail can be decoded first.
@@ -170,7 +172,7 @@ struct Reopen { idx: usize, dec: Box<dyn TrackDecoder>, plan: PipelinePlan, prev
 /// track; `tail` holds the outgoing track's remaining output until its end is known.
 struct Crossfade {
     inc: Feeding,
-    tail: Vec<f64>,
+    tail: TailBuffer,
     tail_done: bool,
     /// Overlap wanted, in output frames; `total` is fixed once the tail's length is known.
     planned: usize,
@@ -841,9 +843,10 @@ impl Player {
         let spec = dec.info().spec;
         let mut chain = ProcessChain::new(plan, spec, None);
         chain.set_gain(self.rg_for(next).linear());
+        let planned = (overlap * fmt.sample_rate as f64).round() as usize;
         self.xfade = Some(Crossfade {
             inc: Feeding { idx: next, dec, chain, decoded: 0, eof: false },
-            tail: vec![], tail_done: false, planned: (overlap * fmt.sample_rate as f64).round() as usize,
+            tail: TailBuffer::new(fmt.channels as usize, planned), tail_done: false, planned,
             total: 0, pos: 0, mixed: 0, head: vec![], marker_pushed: false,
         });
         true
@@ -857,21 +860,31 @@ impl Player {
         let mut x = self.xfade.take().expect("crossfade_step with xfade");
         let Some(feed) = self.feeding.as_mut() else { return };
         if !x.tail_done {
+            let mut rendered = Vec::new();
+            let mut failed = None;
             match feed.dec.next_block() {
-                Ok(Some(block)) => { feed.decoded += block.frames() as u64; feed.chain.render(&block, &mut x.tail); }
-                Ok(None) => { feed.chain.render_flush(&mut x.tail); x.tail_done = true; }
-                Err(e) => { let idx = feed.idx; feed.chain.render_flush(&mut x.tail); x.tail_done = true; self.track_error(idx, &e); }
+                Ok(Some(block)) => { feed.decoded += block.frames() as u64; feed.chain.render(&block, &mut rendered); }
+                Ok(None) => { feed.chain.render_flush(&mut rendered); x.tail_done = true; }
+                Err(e) => { feed.chain.render_flush(&mut rendered); x.tail_done = true; failed = Some((feed.idx, e)); }
             }
-            if x.tail_done { x.total = x.planned.min(x.tail.len() / ch); }
+            // Frames older than the overlap window are written now, unmixed (bounded memory, paced by the ring).
+            let early = x.tail.push(&rendered);
+            if !early.is_empty() {
+                let mut bytes = Vec::new();
+                feed.chain.encode(&early, &mut bytes);
+                self.push_bytes(bytes);
+            }
+            if let Some((idx, e)) = failed { self.track_error(idx, &e); }
+            if x.tail_done { x.total = x.planned.min(x.tail.frames()); }
             self.xfade = Some(x);
             return;
         }
-        let tail_frames = x.tail.len() / ch;
+        let tail_frames = x.tail.frames();
         let unmixed_end = tail_frames - x.total;
         let mut bytes = Vec::new();
         if x.pos < unmixed_end {
             let n = (unmixed_end - x.pos).min(SLICE);
-            feed.chain.encode(&x.tail[x.pos * ch..(x.pos + n) * ch], &mut bytes);
+            feed.chain.encode(&x.tail.samples()[x.pos * ch..(x.pos + n) * ch], &mut bytes);
             x.pos += n;
             self.push_bytes(bytes);
             self.xfade = Some(x);
@@ -896,7 +909,7 @@ impl Player {
             for f in 0..n {
                 let (go, gi) = equal_power((x.mixed + f) as f64 / x.total as f64);
                 for c in 0..ch {
-                    let a = x.tail.get((x.pos + f) * ch + c).copied().unwrap_or(0.0);
+                    let a = x.tail.samples().get((x.pos + f) * ch + c).copied().unwrap_or(0.0);
                     let b = x.head.get(f * ch + c).copied().unwrap_or(0.0);
                     mixed.push(a * go + b * gi);
                 }
