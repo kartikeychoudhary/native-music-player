@@ -2,9 +2,11 @@ import { FolderPlus, RefreshCw, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { DevicePicker } from '../components/DevicePicker'
+import { EqPanel } from '../components/EqPanel'
 import { ScanStatus } from '../components/ScanStatus'
 import { SHORTCUTS } from '../lib/shortcuts'
 import { S } from '../lib/strings'
+import { useDsp } from '../stores/dsp'
 import { useLibrary } from '../stores/library'
 import { usePlayer } from '../stores/player'
 import { useUi } from '../stores/ui'
@@ -13,6 +15,8 @@ import v from './views.module.css'
 export function SettingsView() {
   const folders = useLibrary((l) => l.folders)
   const mode = usePlayer((p) => p.state.mode)
+  const dsp = useDsp((d) => d.state)
+  const bitPerfect = mode === 'bitPerfect'
   const expanded = useUi((u) => u.sidebarExpanded)
   const [removing, setRemoving] = useState<{ id: number; path: string } | null>(null)
   const lib = useLibrary.getState()
@@ -58,6 +62,31 @@ export function SettingsView() {
           </div>
           <span className="muted">{S.buffer}</span><span className="mono">{S.bufferInfo}</span>
         </div>
+      </section>
+
+      <section className={v.section}>
+        <h2 className={v.sectionTitle}>{S.sound}</h2>
+        {bitPerfect && <p className="muted" role="note">{S.dspBitPerfect}</p>}
+        <EqPanel disabled={bitPerfect} />
+        {dsp && (
+          <div style={{ display: 'grid', gridTemplateColumns: '180px 1fr', gap: '12px 16px', alignItems: 'center' }}>
+            <span className="muted">{S.crossfade}</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <input type="range" min={0} max={12} step={0.5} value={dsp.crossfadeSecs} aria-label={S.crossfade} disabled={bitPerfect}
+                onChange={(e) => void useDsp.getState().setCrossfade(Number(e.target.value))} style={{ width: 220, accentColor: 'var(--accent)' }} />
+              <span className="mono">{S.crossfadeValue(dsp.crossfadeSecs)}</span>
+            </span>
+            <span className="muted">{S.replayGain}</span>
+            <div role="radiogroup" aria-label={S.replayGain} style={{ display: 'flex', gap: 16 }}>
+              {(['off', 'track', 'album'] as const).map((m) => (
+                <label key={m} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <input type="radio" name="rg" checked={dsp.replayGain === m} disabled={bitPerfect} onChange={() => void useDsp.getState().setReplayGain(m)} />
+                  {S.rgModes[m]}
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
       </section>
 
       <section className={v.section}>

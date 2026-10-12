@@ -4,10 +4,18 @@ import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } fr
 import { vi } from 'vitest'
 import type { AuroraApi, Methods } from '../src/shared/api'
 import { createAppRouter } from '../src/renderer/router'
+import { useDsp } from '../src/renderer/stores/dsp'
 import { useLibrary } from '../src/renderer/stores/library'
 import { usePlayer } from '../src/renderer/stores/player'
 import { useUi } from '../src/renderer/stores/ui'
 import { DEFAULT_SETTINGS } from '../src/shared/settings'
+
+export const DSP_DEFAULT = { eq: { enabled: false, bands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], preamp: 0, preset: 'Flat' }, crossfadeSecs: 0, replayGain: 'off' }
+export const PRESETS = [
+  { name: 'Flat', bands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], preamp: 0, builtin: true },
+  { name: 'Bass', bands: [6, 5, 4, 2, 0, 0, 0, 0, 0, 0], preamp: 0, builtin: true },
+  { name: 'Mine', bands: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], preamp: -1, builtin: false },
+]
 
 type Handler = (params: any) => any
 const DEFAULTS: Partial<Record<keyof Methods, Handler>> = {
@@ -22,6 +30,8 @@ const DEFAULTS: Partial<Record<keyof Methods, Handler>> = {
   'library.genres': () => ({ items: [], total: 0 }),
   'library.tracks': () => ({ items: [], total: 0 }),
   'library.search': () => ({ tracks: [], albums: [], artists: [] }),
+  'dsp.get': () => DSP_DEFAULT,
+  'dsp.presets': () => PRESETS,
 }
 
 export function fakeApi(overrides: Partial<Record<keyof Methods, Handler>> = {}) {
@@ -55,6 +65,7 @@ export function resetStores() {
   usePlayer.setState(usePlayer.getInitialState())
   useLibrary.setState(useLibrary.getInitialState())
   useUi.setState(useUi.getInitialState())
+  useDsp.setState(useDsp.getInitialState())
 }
 
 /** Renders the real route tree at `path` with the stores connected to `api`. */
@@ -63,6 +74,7 @@ export async function renderAt(path: string, api: AuroraApi = fakeApi().api) {
   const router = createAppRouter(createMemoryHistory({ initialEntries: [path] }))
   usePlayer.getState().connect(api)
   useLibrary.getState().connect(api)
+  useDsp.getState().connect(api)
   await act(async () => { render(<RouterProvider router={router} />) })
   return { router }
 }

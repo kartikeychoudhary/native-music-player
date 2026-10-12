@@ -1,5 +1,5 @@
 /** Events the renderer must not miss: the engine sends some (e.g. "library unavailable") only once, right after it starts. */
-const HELD_EVENTS = new Set(['engine.error', 'library.scanProgress', 'library.changed'])
+const HELD_EVENTS = new Set(['engine.error', 'library.scanProgress', 'library.changed', 'dsp.changed'])
 
 /**
  * Relays engine events to the renderer. Until `ready()` (the page has loaded and subscribed), and

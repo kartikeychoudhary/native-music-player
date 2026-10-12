@@ -13,6 +13,7 @@ import { createRoot } from 'react-dom/client'
 import { installDropGuard } from './lib/dropGuard'
 import { MiniApp } from './mini/MiniApp'
 import { createAppRouter } from './router'
+import { useDsp } from './stores/dsp'
 import { useLibrary } from './stores/library'
 import { usePlayer } from './stores/player'
 import { useUi } from './stores/ui'
@@ -26,6 +27,7 @@ if (window.location.hash.startsWith('#/mini')) {
 } else {
   const router = createAppRouter()
   useLibrary.getState().connect(api)
+  useDsp.getState().connect(api)
   void api.getSettings().then((s) => {
     useUi.getState().applySettings(s)
     const hash = window.location.hash

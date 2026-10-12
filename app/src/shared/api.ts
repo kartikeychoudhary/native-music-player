@@ -4,9 +4,13 @@ import type { ArtistDetail } from '@protocol/ArtistDetail'
 import type { ArtistRow } from '@protocol/ArtistRow'
 import type { ArtworkInfo } from '@protocol/ArtworkInfo'
 import type { ArtworkParams } from '@protocol/ArtworkParams'
+import type { CrossfadeParams } from '@protocol/CrossfadeParams'
 import type { DeviceInfo } from '@protocol/DeviceInfo'
 import type { DeviceParams } from '@protocol/DeviceParams'
+import type { DspState } from '@protocol/DspState'
+import type { EnabledParams } from '@protocol/EnabledParams'
 import type { EngineErrorEvent } from '@protocol/EngineErrorEvent'
+import type { EqPreset } from '@protocol/EqPreset'
 import type { ExportParams } from '@protocol/ExportParams'
 import type { Folder } from '@protocol/Folder'
 import type { GenreRow } from '@protocol/GenreRow'
@@ -34,11 +38,13 @@ import type { RecentParams } from '@protocol/RecentParams'
 import type { RecentResult } from '@protocol/RecentResult'
 import type { RenameParams } from '@protocol/RenameParams'
 import type { RepeatParams } from '@protocol/RepeatParams'
+import type { ReplayGainParams } from '@protocol/ReplayGainParams'
 import type { RescanParams } from '@protocol/RescanParams'
 import type { ScanProgress } from '@protocol/ScanProgress'
 import type { SearchParams } from '@protocol/SearchParams'
 import type { SearchResults } from '@protocol/SearchResults'
 import type { SeekParams } from '@protocol/SeekParams'
+import type { SetEqParams } from '@protocol/SetEqParams'
 import type { ShuffleParams } from '@protocol/ShuffleParams'
 import type { SignalPath } from '@protocol/SignalPath'
 import type { TrackDetail } from '@protocol/TrackDetail'
@@ -99,6 +105,14 @@ export type Methods = {
   'playlists.reorder': M<PlaylistReorderParams, Playlist>
   'playlists.importM3u': M<PathParams, ImportResult>
   'playlists.exportM3u': M<ExportParams, null>
+  'dsp.get': M<None, DspState>
+  'dsp.presets': M<None, EqPreset[]>
+  'dsp.setEq': M<SetEqParams, DspState>
+  'dsp.setEqEnabled': M<EnabledParams, DspState>
+  'dsp.savePreset': M<NameParams, EqPreset>
+  'dsp.deletePreset': M<NameParams, DspState>
+  'dsp.setCrossfade': M<CrossfadeParams, DspState>
+  'dsp.setReplayGain': M<ReplayGainParams, DspState>
 }
 
 export type Events = {
@@ -110,6 +124,7 @@ export type Events = {
   'engine.status': EngineStatus
   'library.scanProgress': ScanProgress
   'library.changed': LibraryChanged
+  'dsp.changed': DspState
 }
 
 export const ALLOWED_METHODS = [
@@ -122,6 +137,7 @@ export const ALLOWED_METHODS = [
   'library.artwork', 'library.recent',
   'playlists.list', 'playlists.get', 'playlists.create', 'playlists.rename', 'playlists.delete', 'playlists.addTracks',
   'playlists.removeItems', 'playlists.reorder', 'playlists.importM3u', 'playlists.exportM3u',
+  'dsp.get', 'dsp.presets', 'dsp.setEq', 'dsp.setEqEnabled', 'dsp.savePreset', 'dsp.deletePreset', 'dsp.setCrossfade', 'dsp.setReplayGain',
 ] as const satisfies readonly (keyof Methods)[]
 
 // Compile-time check that every typed method is allowed (and nothing else is).
