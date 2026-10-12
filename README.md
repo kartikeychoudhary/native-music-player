@@ -78,9 +78,9 @@ Windows Defender real-time scanning can slow corpus generation and the first sca
 
 Settings, Sound holds the DSP features. The EQ and crossfade apply to everything that plays in processed mode, including files opened from outside the library. ReplayGain applies to library tracks only.
 
-- **EQ:** 10 bands with presets. Your own presets are kept in `dsp.json` in the data directory.
-- **Crossfade:** 0 to 12 s. With smart skip, tracks of an album played in order stay gapless; a manual skip uses a short fade instead.
-- **ReplayGain:** track, album or off. Gain is peak-protected so it never clips. It works for library tracks only, and Opus R128 gain tags are included.
+- **EQ:** 10 bands with presets. Your own presets are kept in `dsp.json` in the data directory. The EQ is bypassed on outputs with more than 8 channels.
+- **Crossfade:** 0 to 12 s. With smart skip, tracks of an album played in order stay gapless; a manual skip uses a short fade instead. When a track's length isn't known, the tracks join gaplessly instead of crossfading.
+- **ReplayGain:** track, album or off. Gain is peak-protected so it never clips. It works for library tracks only, and Opus R128 gain tags are included. Opus files scanned before this milestone need a rescan (Settings, Library folders, Rescan all) to pick up their R128 gains.
 - **Bit-perfect:** the EQ, crossfade and ReplayGain are all off in bit-perfect mode, and the signal path says so.
 
 ## Lyrics
