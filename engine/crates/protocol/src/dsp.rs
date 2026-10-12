@@ -8,7 +8,7 @@ use ts_rs::TS;
 pub enum ReplayGainMode { #[default] Off, Track, Album }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 #[ts(export)]
 pub struct EqSettings {
     pub enabled: bool,
@@ -25,7 +25,7 @@ impl Default for EqSettings {
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 #[ts(export)]
 pub struct DspState { pub eq: EqSettings, pub crossfade_secs: f32, pub replay_gain: ReplayGainMode }
 
@@ -57,3 +57,20 @@ pub struct CrossfadeParams { pub seconds: f32 }
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct ReplayGainParams { pub mode: ReplayGainMode }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_fields_fill_in_defaults() {
+        let s: DspState = serde_json::from_str("{}").unwrap();
+        assert_eq!(s, DspState::default());
+        let s: DspState = serde_json::from_str(r#"{"crossfadeSecs":4.0,"eq":{"enabled":true,"preamp":-2.0}}"#).unwrap();
+        assert_eq!((s.crossfade_secs, s.eq.enabled, s.eq.preamp), (4.0, true, -2.0));
+        assert_eq!(s.eq.bands, vec![0.0; 10], "missing bands fall back to flat");
+        assert_eq!(s.replay_gain, ReplayGainMode::Off);
+        let s: DspState = serde_json::from_str(r#"{"somethingNew":1,"eq":{"enabled":true,"future":[]}}"#).unwrap();
+        assert!(s.eq.enabled, "unknown fields are ignored");
+    }
+}
