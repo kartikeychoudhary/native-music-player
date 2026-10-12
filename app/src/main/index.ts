@@ -16,6 +16,7 @@ import { logDir, logger } from './logs'
 import { safeSend } from './safeSend'
 import { SettingsStore } from './settings'
 import { createTray } from './tray'
+import { createUpdateController, latestPublishedVersion, releaseUrl, updateMode } from './updates'
 import { createVizHub, hookSender } from './viz'
 import { WindowManager } from './windows'
 
@@ -150,10 +151,26 @@ app.whenReady().then(() => {
   ipcMain.handle('aurora:openLogs', async () => { await shell.openPath(logDir()) })
   const build = readBuildInfo({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath })
   const licensesPath = () => (app.isPackaged ? join(process.resourcesPath, 'THIRD_PARTY_LICENSES.txt') : join(app.getAppPath(), 'build/generated/THIRD_PARTY_LICENSES.txt'))
-  ipcMain.handle('aurora:appInfo', () => ({ version: app.getVersion(), variant: build.variant, platform: process.platform, arch: process.arch, licenses: existsSync(licensesPath()) }))
   ipcMain.handle('aurora:openLicenses', async () => { if (existsSync(licensesPath())) await shell.openPath(licensesPath()) })
 
   supervisor.start()
+
+  const mode = updateMode(kind, build)
+  const updates = createUpdateController({
+    mode, currentVersion: app.getVersion(), enabled: () => settings.get().autoUpdate,
+    autoUpdater: () => { const { autoUpdater } = require('electron-updater') as typeof import('electron-updater'); autoUpdater.logger = { info: engineLog, warn: engineLog, error: engineLog, debug: () => {} } as never; return autoUpdater },
+    latestVersion: () => latestPublishedVersion(net.fetch as unknown as typeof fetch),
+    beforeInstall: async () => { quitting = true; windows.saveMainBounds(); settings.flush(); await supervisor.stop() },
+    onState: (s) => windows.send('update.state', s),
+    setTimer: (fn, ms) => setTimeout(fn, ms), setRepeat: (fn, ms) => setInterval(fn, ms),
+  })
+  updates.start()
+  ipcMain.handle('aurora:updateState', () => updates.state)
+  ipcMain.handle('aurora:checkUpdates', () => updates.check())
+  ipcMain.handle('aurora:installUpdate', () => updates.install())
+  ipcMain.handle('aurora:openRelease', async () => { const s = updates.state; if ('version' in s) await shell.openExternal(releaseUrl(s.version)) })
+  ipcMain.handle('aurora:appInfo', () => ({ version: app.getVersion(), variant: build.variant, platform: process.platform, arch: process.arch, licenses: existsSync(licensesPath()), updateMode: mode }))
+
   windows.createMain()
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) windows.createMain() })
 })

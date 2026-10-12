@@ -20,6 +20,8 @@ export interface UiStore {
   setNowPlayingTab(t: NowPlayingTab): void
   accentTint: boolean
   setAccentTint(on: boolean): void
+  autoUpdate: boolean
+  setAutoUpdate(on: boolean): void
   setSidebar(expanded: boolean, persist?: boolean): void
   applySettings(s: Settings): void
   toast(kind: Toast['kind'], text: string): void
@@ -48,11 +50,16 @@ export const useUi = create<UiStore>()((set, get) => ({
     set({ accentTint: on })
     void usePlayer.getState().api?.setSettings({ accentTint: on }).catch(() => {})
   },
+  autoUpdate: true,
+  setAutoUpdate(on) {
+    set({ autoUpdate: on })
+    void usePlayer.getState().api?.setSettings({ autoUpdate: on }).catch(() => {})
+  },
   setSidebar(expanded, persist = true) {
     set({ sidebarExpanded: expanded })
     if (persist) void usePlayer.getState().api?.setSettings({ sidebarExpanded: expanded }).catch(() => {})
   },
-  applySettings: (s) => set({ sidebarExpanded: s.sidebarExpanded, accentTint: s.accentTint }),
+  applySettings: (s) => set({ sidebarExpanded: s.sidebarExpanded, accentTint: s.accentTint, autoUpdate: s.autoUpdate }),
   toast(kind, text) {
     const id = nextToast++
     set((s) => ({ toasts: [...s.toasts.slice(-3), { id, kind, text }] }))

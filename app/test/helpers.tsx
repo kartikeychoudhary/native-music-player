@@ -8,6 +8,7 @@ import { useDsp } from '../src/renderer/stores/dsp'
 import { useLibrary } from '../src/renderer/stores/library'
 import { usePlayer } from '../src/renderer/stores/player'
 import { useUi } from '../src/renderer/stores/ui'
+import { useUpdates } from '../src/renderer/stores/updates'
 import { DEFAULT_SETTINGS } from '../src/shared/settings'
 
 export const DSP_DEFAULT = { eq: { enabled: false, bands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], preamp: 0, preset: 'Flat' }, crossfadeSecs: 0, replayGain: 'off' }
@@ -51,8 +52,12 @@ export function fakeApi(overrides: Partial<Record<keyof Methods, Handler>> = {})
     status: vi.fn(async () => ({ state: 'ready' })),
     restartEngine: vi.fn(async () => {}),
     openLogs: vi.fn(async () => {}),
-    appInfo: vi.fn(async () => ({ version: '0.0.0', variant: 'standard', platform: 'linux', arch: 'x64', licenses: false })),
+    appInfo: vi.fn(async () => ({ version: '0.0.0', variant: 'standard', platform: 'linux', arch: 'x64', licenses: false, updateMode: 'off' })),
     openLicenses: vi.fn(async () => {}),
+    updateState: vi.fn(async () => ({ status: 'idle' })),
+    checkForUpdates: vi.fn(async () => {}),
+    installUpdate: vi.fn(async () => {}),
+    openRelease: vi.fn(async () => {}),
     toggleMini: vi.fn().mockResolvedValue(undefined),
     showMain: vi.fn().mockResolvedValue(undefined),
     setViz: vi.fn(),
@@ -68,6 +73,7 @@ export function resetStores() {
   useLibrary.setState(useLibrary.getInitialState())
   useUi.setState(useUi.getInitialState())
   useDsp.setState(useDsp.getInitialState())
+  useUpdates.setState(useUpdates.getInitialState())
 }
 
 /** Renders the real route tree at `path` with the stores connected to `api`. */

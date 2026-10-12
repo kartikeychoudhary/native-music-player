@@ -7,19 +7,21 @@ import { REPO_ROOT } from './versions.ts'
 export interface LicenseText { file: string; text: string }
 export interface Component {
   source: 'cargo' | 'npm'; name: string; version: string; license: string | null; texts: LicenseText[]
-  /** Cargo.toml `authors`, the only copyright source for the canonical fallback. */
+  /** Cargo.toml `authors` or the package.json `author`: the only copyright source for the canonical fallback. */
   authors?: string[]
   /** The license chosen from a multi-license expression, when it matters to the reader (set by fallbackText). */
   elected?: string
 }
 export interface CargoPackage { id: string; name: string; version: string; license: string | null; manifest_path: string; source: string | null; authors?: string[] }
 export interface CargoMetadata { packages: CargoPackage[]; resolve: { root: string | null; nodes: { id: string; deps: { pkg: string; dep_kinds: { kind: string | null }[] }[] }[] } }
-export interface NpmPackage { name: string; version: string; license: string | null; dir: string }
+export interface NpmPackage { name: string; version: string; license: string | null; dir: string; /** package.json `author`, the only copyright source for the canonical fallback. */ author?: string }
 
 /** SPDX ids Aurora may ship. Anything else needs a human decision (add it here with a reason). */
 export const ALLOWED = new Set([
   'MIT', 'MIT-0', 'Apache-2.0', 'Apache-2.0 WITH LLVM-exception', 'BSD-2-Clause', 'BSD-3-Clause', 'ISC', 'Zlib', '0BSD',
   'MPL-2.0', 'Unicode-3.0', 'Unicode-DFS-2016', 'CC0-1.0', 'BSL-1.0', 'Unlicense', 'OFL-1.1', 'BlueOak-1.0.0', 'CDLA-Permissive-2.0',
+  // argparse 2.0.1 (electron-updater -> js-yaml): OSI-approved and permissive; the package ships its LICENSE, which is included in full.
+  'Python-2.0',
 ])
 
 /**
@@ -87,12 +89,12 @@ export function cargoComponents(meta: CargoMetadata, readTexts: (dir: string, ex
 
 export function npmComponents(pkgs: NpmPackage[], readTexts: (dir: string) => LicenseText[]): Component[] {
   const out = new Map<string, Component>()
-  for (const p of pkgs) { const k = `${p.name}@${p.version}`; if (!out.has(k)) out.set(k, { source: 'npm', name: p.name, version: p.version, license: p.license, texts: readTexts(p.dir) }) }
+  for (const p of pkgs) { const k = `${p.name}@${p.version}`; if (!out.has(k)) out.set(k, { source: 'npm', name: p.name, version: p.version, license: p.license, texts: readTexts(p.dir), ...(p.author ? { authors: [p.author] } : {}) }) }
   return [...out.values()].sort((a, b) => a.name.localeCompare(b.name))
 }
 
 export function render(components: Component[]): string {
-  const head = 'Aurora includes the following third-party software. Each component is listed with its license\nand the license texts its authors ship. Where a package ships no license file, the canonical text of its\nlicense is given instead (marked as such, with the copyright holders from its Cargo.toml), and where a license\noffers a choice, the one elected is shown. Electron and Chromium licenses are in LICENSES.chromium.html\nnext to the Aurora executable.\n'
+  const head = 'Aurora includes the following third-party software. Each component is listed with its license\nand the license texts its authors ship. Where a package ships no license file, the canonical text of its\nlicense is given instead (marked as such, with the copyright holders from its Cargo.toml or package.json), and where a license\noffers a choice, the one elected is shown. Electron and Chromium licenses are in LICENSES.chromium.html\nnext to the Aurora executable.\n'
   const body = components.map((c) => [
     '='.repeat(78), `${c.name} ${c.version} (${c.source === 'cargo' ? 'Rust crate' : 'npm package'})`, `License: ${c.license ?? 'see text below'}`, ...(c.elected ? [`Elected: ${c.elected}`] : []), '',
     ...c.texts.flatMap((t) => [`--- ${t.file} ---`, t.text.trim(), '']),
@@ -117,7 +119,9 @@ export function fallbackText(c: Component, mitTemplate: string): { texts: Licens
   const authors = c.authors ?? []
   if (!branches.includes('MIT') || authors.length === 0) return null
   const text = mitTemplate.replace('{{copyright}}', `Copyright (c) ${authors.join(', ')}`)
-  const file = 'MIT (canonical text: the crate ships no license file; copyright from its Cargo.toml authors)'
+  const file = c.source === 'npm'
+    ? 'MIT (canonical text: the package ships no license file; copyright from its package.json author)'
+    : 'MIT (canonical text: the crate ships no license file; copyright from its Cargo.toml authors)'
   return { texts: [{ file, text }], ...(branches.length > 1 ? { elected: 'MIT' } : {}) }
 }
 
@@ -170,8 +174,9 @@ function resolvePackage(name: string, parentDir: string | null, appDir: string):
   const candidates = [...(parentDir ? [join(parentDir, 'node_modules', name)] : []), join(appDir, 'node_modules', name)]
   const dir = candidates.find((d) => existsSync(join(d, 'package.json')))
   if (!dir) throw new Error(`cannot find npm package ${name} (looked in ${candidates.join(', ')})`)
-  const json = readJson<{ version: string; license?: unknown; dependencies?: Record<string, string> }>(join(dir, 'package.json'))
-  return { name, version: json.version, license: typeof json.license === 'string' ? json.license : null, dir, dependencies: Object.keys(json.dependencies ?? {}) }
+  const json = readJson<{ version: string; license?: unknown; author?: unknown; dependencies?: Record<string, string> }>(join(dir, 'package.json'))
+  const author = typeof json.author === 'string' ? json.author : typeof (json.author as { name?: unknown } | undefined)?.name === 'string' ? (json.author as { name: string }).name : undefined
+  return { name, version: json.version, license: typeof json.license === 'string' ? json.license : null, dir, ...(author ? { author } : {}), dependencies: Object.keys(json.dependencies ?? {}) }
 }
 
 function npmPackages(): NpmPackage[] {
@@ -186,7 +191,7 @@ function npmPackages(): NpmPackage[] {
     const pkg = resolvePackage(name, parentDir, appDir)
     if (seen.has(pkg.dir)) return
     seen.add(pkg.dir)
-    out.set(pkg.dir, { name: pkg.name, version: pkg.version, license: pkg.license, dir: pkg.dir })
+    out.set(pkg.dir, { name: pkg.name, version: pkg.version, license: pkg.license, dir: pkg.dir, ...(pkg.author ? { author: pkg.author } : {}) })
     for (const dep of pkg.dependencies) walk(dep, pkg.dir)
   }
   for (const name of Object.keys(readJson<{ dependencies?: Record<string, string> }>(join(appDir, 'package.json')).dependencies ?? {})) walk(name, null)

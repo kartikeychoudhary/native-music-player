@@ -58,7 +58,17 @@ import type { Settings } from './settings'
 
 export type EngineStatus = { state: 'starting' | 'ready' | 'restarting' | 'failed' | 'mismatch'; message?: string; engine?: EngineReady }
 
-export interface AppInfo { version: string; variant: 'standard' | 'nofdk'; platform: string; arch: string; licenses: boolean }
+export type UpdateMode = 'auto' | 'notify' | 'off'
+export type UpdateState =
+  | { status: 'idle' }
+  | { status: 'checking' }
+  | { status: 'current' }
+  | { status: 'available'; version: string }
+  | { status: 'downloading'; version: string; percent: number }
+  | { status: 'ready'; version: string }
+  | { status: 'error'; message: string }
+
+export interface AppInfo { version: string; variant: 'standard' | 'nofdk'; platform: string; arch: string; licenses: boolean; updateMode: UpdateMode }
 type None = Record<string, never>
 type M<P, R> = { params: P; result: R }
 
@@ -131,6 +141,7 @@ export type Events = {
   'library.scanProgress': ScanProgress
   'library.changed': LibraryChanged
   'dsp.changed': DspState
+  'update.state': UpdateState
 }
 
 export const ALLOWED_METHODS = [
@@ -177,6 +188,10 @@ export interface AuroraApi {
   openLogs(): Promise<void>
   appInfo(): Promise<AppInfo>
   openLicenses(): Promise<void>
+  updateState(): Promise<UpdateState>
+  checkForUpdates(): Promise<void>
+  installUpdate(): Promise<void>
+  openRelease(): Promise<void>
   toggleMini(): Promise<void>
   showMain(): Promise<void>
   /** Turns this window's spectrum subscription on or off (main refcounts across windows). */

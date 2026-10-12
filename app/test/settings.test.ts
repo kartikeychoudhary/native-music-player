@@ -20,6 +20,12 @@ describe('settings', () => {
     expect(mergeSettings(DEFAULT_SETTINGS, null)).toEqual(DEFAULT_SETTINGS)
   })
 
+  it('merges the auto-update preference, defaulting to on', () => {
+    expect(mergeSettings(DEFAULT_SETTINGS, {}).autoUpdate).toBe(true)
+    expect(mergeSettings(DEFAULT_SETTINGS, { autoUpdate: false }).autoUpdate).toBe(false)
+    expect(mergeSettings(DEFAULT_SETTINGS, { autoUpdate: 'no' }).autoUpdate).toBe(true)
+  })
+
   it('loads defaults for missing or corrupt files', () => {
     const d = dir()
     expect(loadSettings(join(d, 'none.json'))).toEqual(DEFAULT_SETTINGS)

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { useUpdates } from '../src/renderer/stores/updates'
 import { fakeApi, renderAt } from './helpers'
 
 afterEach(cleanup)
@@ -50,7 +51,7 @@ describe('settings', () => {
 })
 
 describe('About', () => {
-  const info = (extra: Record<string, unknown> = {}) => ({ version: '0.1.0', variant: 'standard', platform: 'win32', arch: 'x64', licenses: true, ...extra })
+  const info = (extra: Record<string, unknown> = {}) => ({ version: '0.1.0', variant: 'standard', platform: 'win32', arch: 'x64', licenses: true, updateMode: 'notify', ...extra })
 
   it('shows the app and engine versions and whether HE-AAC is in this build', async () => {
     const { api } = fakeApi()
@@ -78,5 +79,56 @@ describe('About', () => {
     await screen.findByText('Aurora 0.1.0')
     fireEvent.click(screen.getByRole('button', { name: 'Third-party licenses' }))
     expect(api.openLicenses).toHaveBeenCalled()
+  })
+})
+
+describe('About: updates', () => {
+  const info = (extra: Record<string, unknown> = {}) => ({ version: '0.1.0', variant: 'standard', platform: 'win32', arch: 'x64', licenses: true, updateMode: 'notify', ...extra })
+
+  it('says updates are off in development and offers no check', async () => {
+    const { api } = fakeApi()
+    api.appInfo.mockResolvedValue(info({ updateMode: 'off' }) as never)
+    await renderAt('/settings', api)
+    expect(await screen.findByText('Updates are off in development builds.')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Check now' })).toBeNull()
+    expect(screen.queryByRole('checkbox', { name: 'Check for updates automatically' })).toBeNull()
+  })
+  it('checks on demand and explains where notify-mode downloads come from', async () => {
+    const { api } = fakeApi()
+    api.appInfo.mockResolvedValue(info() as never)
+    await renderAt('/settings', api)
+    expect(await screen.findByText('New versions are downloaded from the GitHub release page.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Check now' }))
+    expect(api.checkForUpdates).toHaveBeenCalled()
+  })
+  it('does not offer the release-page note in auto mode', async () => {
+    const { api } = fakeApi()
+    api.appInfo.mockResolvedValue(info({ updateMode: 'auto' }) as never)
+    await renderAt('/settings', api)
+    await screen.findByRole('button', { name: 'Check now' })
+    expect(screen.queryByText('New versions are downloaded from the GitHub release page.')).toBeNull()
+  })
+  it('shows the status of the last check, and what went wrong', async () => {
+    const { api } = fakeApi()
+    api.appInfo.mockResolvedValue(info() as never)
+    await renderAt('/settings', api)
+    await screen.findByRole('button', { name: 'Check now' })
+    act(() => useUpdates.setState({ state: { status: 'current' } }))
+    expect(screen.getByText('Aurora is up to date.')).toBeTruthy()
+    act(() => useUpdates.setState({ state: { status: 'error', message: 'GitHub answered 403' } }))
+    expect(screen.getByText("Couldn't check for updates: GitHub answered 403")).toBeTruthy()
+    act(() => useUpdates.setState({ state: { status: 'downloading', version: '0.2.0', percent: 42 } }))
+    expect(screen.getByText('Downloading Aurora 0.2.0… 42%')).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Check now' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+  it('turns automatic checks off and on', async () => {
+    const { api } = fakeApi()
+    api.appInfo.mockResolvedValue(info() as never)
+    await renderAt('/settings', api)
+    const box = await screen.findByRole('checkbox', { name: 'Check for updates automatically' })
+    expect((box as HTMLInputElement).checked).toBe(true)
+    fireEvent.click(box)
+    expect(api.setSettings).toHaveBeenCalledWith({ autoUpdate: false })
+    expect((screen.getByRole('checkbox', { name: 'Check for updates automatically' }) as HTMLInputElement).checked).toBe(false)
   })
 })

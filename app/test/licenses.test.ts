@@ -96,6 +96,17 @@ describe('fallback text for components that ship no license file', () => {
     expect(fallbackText(bare('MIT OR Apache-2.0', []), template)).toBeNull()
     expect(fallbackText(bare('MIT AND Zlib'), template)).toBeNull()
   })
+  it('gives an npm package with no license file the canonical MIT text and its package.json author', () => {
+    const [c] = npmComponents([{ name: 'lazy-val', version: '1.0.5', license: 'MIT', dir: '/n/lazy-val', author: 'Vladimir Krivosheev' }], () => [])
+    expect(c.authors).toEqual(['Vladimir Krivosheev'])
+    const got = fallbackText(c, template)
+    expect(got?.texts[0].file).toBe('MIT (canonical text: the package ships no license file; copyright from its package.json author)')
+    expect(got?.texts[0].text).toContain('Copyright (c) Vladimir Krivosheev')
+    expect(fallbackText(npmComponents([{ name: 'x', version: '1.0.0', license: 'MIT', dir: '/n/x' }], () => [])[0], template)).toBeNull()
+  })
+  it('allows the Python-2.0 license (argparse, used by electron-updater via js-yaml)', () => {
+    expect(licenseOk('Python-2.0')).toBe(true)
+  })
   it('renders the elected license', () => {
     const out = render([{ ...bare('CC0-1.0 OR Apache-2.0'), elected: 'CC0-1.0 (no attribution required)' }])
     expect(out).toContain('Elected: CC0-1.0 (no attribution required)')

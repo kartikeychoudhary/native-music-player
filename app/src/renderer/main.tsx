@@ -17,6 +17,7 @@ import { useDsp } from './stores/dsp'
 import { useLibrary } from './stores/library'
 import { usePlayer } from './stores/player'
 import { useUi } from './stores/ui'
+import { useUpdates } from './stores/updates'
 
 installDropGuard(document)
 const api = window.aurora
@@ -28,6 +29,7 @@ if (window.location.hash.startsWith('#/mini')) {
   const router = createAppRouter()
   useLibrary.getState().connect(api)
   useDsp.getState().connect(api)
+  useUpdates.getState().init(api)
   void api.getSettings().then((s) => {
     useUi.getState().applySettings(s)
     const hash = window.location.hash

@@ -7,6 +7,7 @@ import { PromptDialog } from './components/PromptDialog'
 import { Sidebar, SidebarPlaylists } from './components/Sidebar'
 import { Toasts } from './components/Toasts'
 import { TrackInfoDialog } from './components/TrackInfoDialog'
+import { UpdateBanner } from './components/UpdateBanner'
 import { applyAccent, tintFor } from './lib/accent'
 import { useEngineQuery } from './lib/useEngineQuery'
 import { useGo } from './lib/useGo'
@@ -56,6 +57,7 @@ export function Layout() {
       <Sidebar><SidebarPlaylists /></Sidebar>
       <main className={s.main}>
         <EngineBanner />
+        <UpdateBanner />
         <Outlet />
       </main>
       <PlayerBar />

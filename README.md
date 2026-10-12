@@ -37,7 +37,7 @@ Aurora indexes the folders you add into a SQLite library. Everything it stores l
 - `library.db`, the track, album and artist index
 - `artwork/`, the cover cache (WebP covers at 64, 300 and 1000 px)
 - `session.json`, the play queue and position, restored paused on launch
-- `settings.json`, window bounds, last view and preferences
+- `settings.json`, window bounds, last view and preferences, including whether Aurora checks for updates
 
 The engine takes the location as `aurora-engine rpc --data-dir <dir>`. In unpackaged runs, setting `AURORA_DATA_DIR` points both the engine and the app's own settings and logs at a different folder, which is how the end-to-end tests stay away from your real library.
 
@@ -97,6 +97,10 @@ Lyrics come from a sidecar `.lrc` file next to the track (including enhanced wor
 - **Mini-player:** Ctrl/Cmd+M opens a small always-on-top window with the track and the playback controls. It remembers where you left it.
 - **Tray:** the tray menu has play/pause, next, previous, show/hide, the mini-player and the current track.
 - **Now Playing:** Ctrl/Cmd+L opens the expanded Now Playing view on the lyrics tab. It also has the spectrum visualizer.
+
+## Updates
+
+Aurora checks GitHub for a new release 10 seconds after it starts and every 6 hours. This is the only network request it makes. Turn it off in Settings → About. Installed Windows builds (setup.exe), AppImages and signed macOS builds download the update in the background and install it when you click **Restart now**, or the next time you quit. The portable zip, deb and rpm packages, unsigned macOS builds and the no-fdk builds only tell you a new version exists and open its release page.
 
 ## Protocol
 

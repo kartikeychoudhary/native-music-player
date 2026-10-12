@@ -45,5 +45,8 @@
     "vite": "7.3.7",
     "vitest": "5.0.3",
     "zustand": "5.0.15"
+  },
+  "dependencies": {
+    "electron-updater": "6.8.10"
   }
 }
