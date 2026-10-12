@@ -34,7 +34,7 @@ pub enum PlaybackStatus { #[default] Stopped, Playing, Paused }
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 #[ts(export)]
-pub enum StageKind { Channels, Dsd, Resampler, Volume, Dither }
+pub enum StageKind { Channels, Dsd, Resampler, ReplayGain, Eq, Crossfade, Volume, Dither }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]

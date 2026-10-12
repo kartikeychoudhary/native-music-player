@@ -52,11 +52,6 @@ fn output_mode_wire_names() {
 }
 
 #[test]
-fn protocol_version_is_two() {
-    assert_eq!(PROTOCOL_VERSION, 2);
-}
-
-#[test]
 fn list_query_accepts_empty_object() {
     let q: ListQuery = serde_json::from_value(serde_json::json!({})).unwrap();
     assert!(q.filter.is_none() && q.sort.is_none() && q.offset.is_none() && q.limit.is_none() && q.desc.is_none());
@@ -102,4 +97,38 @@ fn queue_params_defaults() {
     assert_eq!(p.start_index, None);
     let p: PlaylistAddParams = serde_json::from_value(serde_json::json!({ "id": 1, "trackIds": [2] })).unwrap();
     assert_eq!(p.index, None);
+}
+
+#[test]
+fn dsp_types_serialize_for_the_wire() {
+    let s = DspState::default();
+    assert_eq!(s.eq.bands, vec![0.0; 10]);
+    assert_eq!(s.eq.preset.as_deref(), Some("Flat"));
+    let v = serde_json::to_value(&s).unwrap();
+    assert_eq!(v["crossfadeSecs"], 0.0);
+    assert_eq!(v["replayGain"], "off");
+    assert_eq!(v["eq"]["enabled"], false);
+    let p: protocol::SetEqParams = serde_json::from_value(serde_json::json!({ "bands": [0,0,0,0,0,0,0,0,0,0], "preamp": -1.5 })).unwrap();
+    assert_eq!((p.preamp, p.preset), (-1.5, None));
+    let r: protocol::ReplayGainParams = serde_json::from_value(serde_json::json!({ "mode": "album" })).unwrap();
+    assert_eq!(r.mode, ReplayGainMode::Album);
+}
+
+#[test]
+fn lyrics_skip_absent_timings() {
+    let l = Lyrics { synced: false, lines: vec![LyricLine { t_ms: None, text: "la".into(), words: None }] };
+    assert_eq!(serde_json::to_value(&l).unwrap(), serde_json::json!({ "synced": false, "lines": [{ "text": "la" }] }));
+    let w = LyricLine { t_ms: Some(1500), text: "a b".into(), words: Some(vec![LyricWord { t_ms: 1500, text: "a ".into() }]) };
+    assert_eq!(serde_json::to_value(&w).unwrap()["words"][0]["tMs"], 1500);
+    let p: protocol::LyricsParams = serde_json::from_value(serde_json::json!({ "trackId": 7 })).unwrap();
+    assert_eq!(p.track_id, 7);
+}
+
+#[test]
+fn dsp_stage_kinds_and_frame_constants() {
+    assert_eq!(serde_json::to_value(StageKind::ReplayGain).unwrap(), "replaygain");
+    assert_eq!(serde_json::to_value(StageKind::Eq).unwrap(), "eq");
+    assert_eq!(serde_json::to_value(StageKind::Crossfade).unwrap(), "crossfade");
+    assert_eq!((protocol::frames::FRAME_MARK, protocol::frames::FRAME_SPECTRUM, protocol::frames::SPECTRUM_BINS), (0x1E, 1, 64));
+    assert_eq!(PROTOCOL_VERSION, 3);
 }
