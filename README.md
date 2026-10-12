@@ -76,7 +76,7 @@ Windows Defender real-time scanning can slow corpus generation and the first sca
 
 ## Sound
 
-Settings, Sound holds the DSP features. The EQ and ReplayGain apply to library tracks.
+Settings, Sound holds the DSP features. The EQ and crossfade apply to everything that plays in processed mode, including files opened from outside the library. ReplayGain applies to library tracks only.
 
 - **EQ:** 10 bands with presets. Your own presets are kept in `dsp.json` in the data directory.
 - **Crossfade:** 0 to 12 s. With smart skip, tracks of an album played in order stay gapless; a manual skip uses a short fade instead.
