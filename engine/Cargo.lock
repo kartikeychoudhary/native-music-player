@@ -871,6 +871,7 @@ dependencies = [
  "fdk-aac",
  "opus",
  "protocol",
+ "realfft",
  "rtrb",
  "rubato",
  "serde",

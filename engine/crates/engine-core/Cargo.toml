@@ -23,6 +23,7 @@ fdk-aac = { workspace = true, optional = true }
 rubato.workspace = true
 audioadapter-buffers.workspace = true
 rtrb.workspace = true
+realfft = "3.5.0"
 cpal.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]

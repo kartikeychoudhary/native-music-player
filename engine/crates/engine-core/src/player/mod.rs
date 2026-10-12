@@ -2,6 +2,7 @@ pub mod chain;
 pub mod pipeline;
 pub mod queue;
 pub mod signal_path;
+pub mod viz;
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -54,6 +55,8 @@ pub enum Command {
     SetReplayGain(ReplayGainMode),
     /// Crossfade length in seconds, clamped to 0..=12. Affects transitions that haven't started yet.
     SetCrossfade(f32),
+    /// Turns the spectrum feed on or off (`PlayerEvent::Spectrum` while on and audio plays).
+    SetViz(bool),
 }
 
 /// A saved session (spec §5.2). The player restores it paused; the first Play opens the stream.
@@ -73,6 +76,8 @@ pub enum PlayerEvent {
     State(PlayerState), SignalPath(SignalPath), Queue(QueueChanged), Error(EngineErrorEvent), DevicesChanged(Vec<DeviceInfo>), Ended,
     /// The audible track crossed `played_threshold_ms` of actual listening (once per play).
     Played { track_id: Option<i64>, path: PathBuf },
+    /// 64 spectrum bands (0..=255), at most 30 per second, only while viz is on and audio plays.
+    Spectrum([u8; 64]),
 }
 
 #[derive(Clone, Debug)]
@@ -135,6 +140,8 @@ struct Active {
     /// Processed bytes waiting for ring space.
     carry: Vec<u8>,
     carry_pos: usize,
+    /// A DoP stream carries DSD bits, not PCM: the spectrum tap stays off.
+    dop: bool,
 }
 
 impl Active {
@@ -224,6 +231,8 @@ struct Player {
     last_devices: (Vec<DeviceInfo>, Instant),
     buffer_secs: f64,
     underrun_times: VecDeque<Instant>,
+    viz_on: bool,
+    viz_tx: Sender<viz::TapStream>,
 }
 
 /// Ring size after `recent` underruns within the last 10 s (spec §6: +1 s per burst, max 8 s).
@@ -240,12 +249,12 @@ impl Player {
     fn new(backend: Arc<dyn OutputBackend>, cfg: PlayerConfig, events: Sender<PlayerEvent>, shared_state: Arc<Mutex<PlayerState>>, seed: u64) -> Self {
         let devices = backend.devices().unwrap_or_default();
         Self {
-            backend, events, shared_state, queue: Queue::new(seed), cur: 0, status: PlaybackStatus::Stopped,
+            backend, shared_state, queue: Queue::new(seed), cur: 0, status: PlaybackStatus::Stopped,
             volume: 1.0, mode: OutputMode::Processed, eq: Arc::new(EqShared::new()), eq_settings: EqSettings::default(), rg_mode: ReplayGainMode::Off,
             crossfade_secs: 0.0, xfade: None, xfade_declined: None, device: None, active: None, feeding: None, prepared: None,
             prepare_failed: None, markers: VecDeque::new(), reopen: None, pending_start: false, exclusive_denied: None, last_excl_caps: None, end_pending: false, queue_current: None, shown_idx: None, resume_ms: None,
             last_tick: Instant::now(), last_underruns: (0, Instant::now()), last_devices: (devices, Instant::now()),
-            buffer_secs: cfg.buffer_secs, underrun_times: VecDeque::new(), cfg,
+            buffer_secs: cfg.buffer_secs, underrun_times: VecDeque::new(), viz_on: false, viz_tx: viz::spawn(events.clone()), events, cfg,
         }
     }
 
@@ -355,6 +364,10 @@ impl Player {
                 self.refresh_dsp_stages();
             }
             Command::SetCrossfade(secs) => { self.crossfade_secs = secs.clamp(0.0, 12.0); self.refresh_dsp_stages(); }
+            Command::SetViz(on) => {
+                self.viz_on = on;
+                if let Some(a) = &self.active { a.shared.tap_on.store(on && !a.dop, Release); }
+            }
             Command::Shutdown => {}
         }
     }
@@ -641,13 +654,19 @@ impl Player {
         let processed = self.mode == OutputMode::Processed && plan.passthrough == Passthrough::None && fmt.channels <= 8;
         shared.apply_eq.store(processed, Release);
         src.attach_eq(self.eq.clone());
+        let (tap_tx, tap_rx) = rtrb::RingBuffer::<f32>::new(fmt.sample_rate as usize / 2);
+        src.attach_tap(tap_tx);
+        // DoP frames carry DSD bits, not PCM: nothing meaningful to show.
+        let dop = plan.passthrough == Passthrough::Dop;
+        shared.tap_on.store(self.viz_on && !dop, Release);
+        let _ = self.viz_tx.send(viz::TapStream { tap: tap_rx, rate: fmt.sample_rate });
         shared.set_gain(volume_gain(self.volume) as f32);
         let mut stream = self.backend.open(self.device.as_deref(), fmt, plan.exclusive, src)?;
         stream.start()?;
         let info = stream.info().clone();
         let bluetooth = self.backend.bluetooth(&info);
         let excl_caps = if plan.exclusive { self.last_excl_caps.clone() } else { None };
-        self.active = Some(Active { _stream: stream, prod, shared, info, bluetooth, excl_caps, written_bytes: 0, carry: vec![], carry_pos: 0 });
+        self.active = Some(Active { _stream: stream, prod, shared, info, bluetooth, excl_caps, written_bytes: 0, carry: vec![], carry_pos: 0, dop });
         // Underrun reporting compares against the new ring's counter, which starts at 0.
         self.last_underruns.0 = 0;
         Ok(())

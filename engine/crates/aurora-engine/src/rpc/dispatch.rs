@@ -95,6 +95,8 @@ pub fn dispatch(ctx: &Ctx, method: &str, p: Value) -> Result<Outcome, RpcError> 
     match method {
         "player.play" => { let p: PlayParams = params(p)?; ok(Command::Play(p.queue_item_id)) }
         "player.pause" => ok(Command::Pause),
+        "viz.subscribe" => ok(Command::SetViz(true)),
+        "viz.unsubscribe" => ok(Command::SetViz(false)),
         "player.toggle" => ok(Command::Toggle),
         "player.stop" => ok(Command::Stop),
         "player.next" => ok(Command::Next),

@@ -26,6 +26,8 @@ pub struct StreamShared {
     pub faded: AtomicBool,
     /// Callback invocations, so the player can tell a running callback from a stalled one.
     pub fills: AtomicU64,
+    /// The player sets this while a visualizer is subscribed: the callback then mirrors the audio it plays into the tap.
+    pub tap_on: AtomicBool,
     gain_bits: AtomicU32,
 }
 
@@ -51,6 +53,9 @@ pub struct RingSource {
     eq_seq: u64,
     eq_on: bool,
     rate: u32,
+    /// Mono mix of what is played (after EQ, before volume), consumed by the spectrum analyzer.
+    tap: Option<Producer<f32>>,
+    channels: usize,
 }
 
 pub fn ring_pair(capacity_frames: usize, format: OutputFormat) -> (Producer<u8>, RingSource, Arc<StreamShared>) {
@@ -59,13 +64,13 @@ pub fn ring_pair(capacity_frames: usize, format: OutputFormat) -> (Producer<u8>,
     let shared = Arc::new(StreamShared {
         consumed_frames: AtomicU64::new(0), discard_to: AtomicU64::new(0), underruns: AtomicU64::new(0),
         playing: AtomicBool::new(false), draining: AtomicBool::new(false), device_lost: AtomicBool::new(false),
-        apply_gain: AtomicBool::new(false), apply_eq: AtomicBool::new(false), fade_out: AtomicBool::new(false), faded: AtomicBool::new(false), fills: AtomicU64::new(0),
+        apply_gain: AtomicBool::new(false), apply_eq: AtomicBool::new(false), fade_out: AtomicBool::new(false), faded: AtomicBool::new(false), fills: AtomicU64::new(0), tap_on: AtomicBool::new(false),
         gain_bits: AtomicU32::new(1.0f32.to_bits()),
     });
     let step = 1.0 / (format.sample_rate as u64 * FADE_MS / 1000).max(1) as f32;
     let source = RingSource { cons, shared: shared.clone(), bpf, sample: format.sample, consumed: 0, level: 1.0, step, max_request: 0, silent_frames: 0, was_fading: false,
         eq: None, eq_design: EqDesign::new(format.sample_rate, &[0.0; 10], 0.0), eq_state: EqState::new(format.channels as usize),
-        eq_seq: u64::MAX, eq_on: false, rate: format.sample_rate,
+        eq_seq: u64::MAX, eq_on: false, rate: format.sample_rate, tap: None, channels: format.channels as usize,
     };
     (prod, source, shared)
 }
@@ -75,6 +80,28 @@ impl RingSource {
     pub fn bytes_per_frame(&self) -> usize { self.bpf }
 
     pub fn attach_eq(&mut self, eq: Arc<EqShared>) { self.eq = Some(eq); self.eq_seq = u64::MAX; }
+
+    pub fn attach_tap(&mut self, tap: Producer<f32>) { self.tap = Some(tap); }
+
+    /// Mono mix of `buf` into the tap (realtime-safe: drops what doesn't fit).
+    fn tap_step(&mut self, buf: &[u8]) {
+        let Some(tap) = self.tap.as_mut() else { return };
+        let (bpf, ch) = (self.bpf, self.channels.max(1));
+        let bytes = self.sample.bytes();
+        for frame in buf.chunks_exact(bpf) {
+            if tap.slots() == 0 { return; }
+            let mut sum = 0f32;
+            for c in frame.chunks_exact(bytes) {
+                sum += match self.sample {
+                    DeviceSample::F32 => f32::from_le_bytes([c[0], c[1], c[2], c[3]]),
+                    DeviceSample::I16 => i16::from_le_bytes([c[0], c[1]]) as f32 / 32_768.0,
+                    DeviceSample::I24 => (i32::from_le_bytes([0, c[0], c[1], c[2]]) >> 8) as f32 / 8_388_608.0,
+                    DeviceSample::I32 => i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f32 / 2_147_483_648.0,
+                };
+            }
+            let _ = tap.push(sum / ch as f32);
+        }
+    }
 
     /// Applies the current EQ to `buf`. A changed setting is picked up here: the design is rebuilt
     /// for this stream's rate (no allocation) and the filter memory is kept, so changes are smooth.
@@ -122,6 +149,7 @@ impl RingSource {
                     chunk.commit_all();
                     self.consumed += frames as u64;
                     if self.shared.apply_eq.load(Relaxed) { self.eq_step(&mut out[..n]); }
+                    if self.shared.tap_on.load(Relaxed) { self.tap_step(&out[..n]); }
                     if self.shared.apply_gain.load(Relaxed) { apply_gain(&mut out[..n], self.sample, self.shared.gain()); }
                     if fading || self.level < 1.0 { self.ramp(&mut out[..n], fading); }
                 } else {
@@ -336,5 +364,23 @@ mod tests {
         eq.publish(false, &[0.0; 10], -12.0);
         s.fill(&mut out);
         assert!(i16s(&out).iter().all(|&v| v == 10_000), "disabled again");
+    }
+
+    #[test]
+    fn tap_mirrors_played_frames_as_mono_and_never_blocks() {
+        let (mut p, mut s, sh) = ring_pair(8192, fmt());
+        let (tp, mut tc) = rtrb::RingBuffer::<f32>::new(8);
+        s.attach_tap(tp);
+        sh.playing.store(true, Relaxed);
+        push(&mut p, &[16_384i16.to_le_bytes(), 0i16.to_le_bytes()].concat().repeat(4)); // L = 0.5, R = 0
+        let mut out = vec![0u8; 4 * 4];
+        s.fill(&mut out);
+        assert!(tc.pop().is_err(), "tap_on is off");
+        sh.tap_on.store(true, Relaxed);
+        push(&mut p, &[16_384i16.to_le_bytes(), 0i16.to_le_bytes()].concat().repeat(16));
+        s.fill(&mut [0u8; 16 * 4]);
+        let got: Vec<f32> = std::iter::from_fn(|| tc.pop().ok()).collect();
+        assert_eq!(got.len(), 8, "a full tap drops the rest");
+        assert!(got.iter().all(|v| (*v - 0.25).abs() < 1e-6), "{got:?}");
     }
 }

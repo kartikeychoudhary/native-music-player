@@ -142,6 +142,7 @@ pub fn run(opts: RunOptions) -> i32 {
                 }
                 PlayerEvent::DevicesChanged(d) => out2.notify("devices.changed", d),
                 PlayerEvent::Played { track_id, path } => if let Some(svc) = &lib2 { record_play(svc, &out2, track_id, &path) },
+                PlayerEvent::Spectrum(bins) => out2.frame(protocol::frames::FRAME_SPECTRUM, &bins),
                 PlayerEvent::Ended => {}
             }
         }

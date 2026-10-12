@@ -4,4 +4,5 @@ pub mod crossfade;
 pub mod eq;
 pub mod replaygain;
 pub mod resample;
+pub mod spectrum;
 pub mod volume;

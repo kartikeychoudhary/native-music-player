@@ -730,3 +730,26 @@ fn removing_the_outgoing_track_while_the_mix_is_audible_keeps_the_incoming_track
     let gap_b = decoded("gap_b.flac");
     assert_crossfade(&f32s(&h.recorded()), &gap_b[from * 2..], &decoded("short_a.flac"), SHORT / 2);
 }
+
+#[test]
+fn spectrum_frames_flow_only_while_viz_is_on() {
+    use engine_core::dsp::spectrum::Analyzer;
+    let (p, h, rx) = setup(OutputMode::Processed);
+    p.send(Command::SetViz(true));
+    queue(&p, &["flac16_44k.flac"]); // L 440 Hz, R 1 kHz, amplitude 1/8
+    let (stop, join) = live_puller(&h);
+    let start = Instant::now();
+    let frame = loop {
+        assert!(start.elapsed() < Duration::from_secs(5), "no spectrum frame");
+        if let Ok(PlayerEvent::Spectrum(b)) = rx.recv_timeout(Duration::from_millis(50)) { break b; }
+    };
+    let a = Analyzer::new(44_100);
+    assert!(frame[a.band_of(440.0)] > 150 && frame[a.band_of(1000.0)] > 150, "{frame:?}");
+    p.send(Command::SetViz(false));
+    std::thread::sleep(Duration::from_millis(150));
+    let _ = rx.try_iter().count();
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!rx.try_iter().any(|e| matches!(e, PlayerEvent::Spectrum(_))), "off means no frames");
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    join.join().unwrap();
+}
