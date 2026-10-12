@@ -72,6 +72,8 @@ impl NullHandle {
         self.inner.recorded.lock().unwrap().extend_from_slice(&buf[..n]);
         n / bpf
     }
+    /// Frames the player has written into the stream's ring that no `pull` has taken yet.
+    pub fn buffered_frames(&self) -> usize { self.inner.source.lock().unwrap().as_ref().map_or(0, |s| s.buffered_frames()) }
     pub fn recorded(&self) -> Vec<u8> { self.inner.recorded.lock().unwrap().clone() }
     pub fn clear_recorded(&self) { self.inner.recorded.lock().unwrap().clear(); }
     pub fn opened(&self) -> Vec<(OutputFormat, bool)> { self.inner.opened.lock().unwrap().clone() }

@@ -79,6 +79,9 @@ impl RingSource {
     pub fn shared(&self) -> &Arc<StreamShared> { &self.shared }
     pub fn bytes_per_frame(&self) -> usize { self.bpf }
 
+    /// Frames written but not yet taken (what a test can wait on to know the feeder has caught up).
+    pub fn buffered_frames(&self) -> usize { self.cons.slots() / self.bpf }
+
     pub fn attach_eq(&mut self, eq: Arc<EqShared>) { self.eq = Some(eq); self.eq_seq = u64::MAX; }
 
     pub fn attach_tap(&mut self, tap: Producer<f32>) { self.tap = Some(tap); }

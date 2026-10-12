@@ -46,6 +46,13 @@ fn pull_frames(h: &NullHandle, frames: usize) {
     while got < frames { got += h.pull((frames - got).min(4096)); assert!(start.elapsed() < Duration::from_secs(10)); std::thread::sleep(Duration::from_micros(200)); }
 }
 
+/// Waits until the player has written at least `frames` frames ahead of the output (nothing is
+/// pulled meanwhile). Replaces sleeping for "long enough": the feeder, not the clock, decides.
+fn wait_buffered(h: &NullHandle, frames: usize) {
+    let start = Instant::now();
+    while h.buffered_frames() < frames { assert!(start.elapsed() < Duration::from_secs(10), "only {} frames buffered, want {frames}", h.buffered_frames()); std::thread::sleep(Duration::from_millis(1)); }
+}
+
 fn f32s(bytes: &[u8]) -> Vec<f32> { bytes.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect() }
 
 #[test]
@@ -474,13 +481,25 @@ fn eq_stage_change_reaches_a_track_that_is_queued_but_not_yet_audible() {
     let (p, h, rx) = setup(OutputMode::Processed);
     queue(&p, &["gap_a.flac", "gap_b.flac"]);
     pull_frames(&h, 44_100);
-    std::thread::sleep(Duration::from_millis(300)); // the ring has filled past gap_a's end: gap_b's marker exists
-    let _ = rx.try_iter().count();
+    // More than (gap_a's end - what was pulled) buffered means the feeder wrote past gap_a's last frame, so it
+    // had already started gap_b (pushing its marker) while gap_b is still 1.4 s from audible.
+    wait_buffered(&h, GAP_A - 44_100 + 1);
+    let is_eq_active = |e: &PlayerEvent| matches!(e, PlayerEvent::SignalPath(s) if s.stages.iter().any(|st| st.kind == StageKind::Eq && st.active));
     p.send(Command::SetEq(eq(true, [6.0, 5.0, 4.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 0.0, Some("Bass"))));
-    let events = run_to_end(&h, &rx);
+    // Pull nothing until the player has applied the change (it re-sends the audible track's path):
+    // pulling on would make gap_b audible before the command is handled.
+    let mut events = vec![];
+    let start = Instant::now();
+    while !events.iter().any(is_eq_active) {
+        assert!(start.elapsed() < Duration::from_secs(10), "the change was never applied");
+        events.extend(rx.try_iter());
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    events.extend(run_to_end(&h, &rx));
     let paths: Vec<SignalPath> = events.into_iter().filter_map(|e| if let PlayerEvent::SignalPath(s) = e { Some(s) } else { None }).collect();
-    assert!(paths.len() >= 2, "gap_a's refresh, then gap_b becoming audible: {} signal paths", paths.len());
-    for sp in [paths.first().unwrap(), paths.last().unwrap()] {
+    let refreshed = paths.iter().position(|sp| sp.stages.iter().any(|st| st.kind == StageKind::Eq && st.active)).unwrap();
+    assert!(refreshed + 1 < paths.len(), "gap_a's refresh, then gap_b becoming audible: {} signal paths", paths.len());
+    for sp in &paths[refreshed..] {
         let st = sp.stages.iter().find(|s| s.kind == StageKind::Eq).unwrap();
         assert_eq!((st.active, st.detail.as_str()), (true, "Bass"));
     }
@@ -538,6 +557,54 @@ fn bit_perfect_ignores_replay_gain() {
     run_to_end(&h, &rx);
     let expected: Vec<u8> = read_s32le("pcm24_96k.s32le").iter().flat_map(|s| (s >> 8).to_le_bytes()[..3].to_vec()).collect();
     assert_eq!(h.recorded(), expected);
+}
+
+/// Pulls (so a restart's fade-out can finish) until the player publishes a signal path matching `pred`.
+fn pull_until_signal_path(h: &NullHandle, rx: &Receiver<PlayerEvent>, pred: impl Fn(&SignalPath) -> bool) -> SignalPath {
+    let start = Instant::now();
+    loop {
+        assert!(start.elapsed() < Duration::from_secs(10), "no matching signal path");
+        h.pull(256);
+        if let Some(sp) = rx.try_iter().filter_map(|e| if let PlayerEvent::SignalPath(s) = e { Some(s) } else { None }).find(&pred) { return sp; }
+        std::thread::sleep(Duration::from_micros(200));
+    }
+}
+
+#[test]
+fn leaving_bit_perfect_brings_eq_replay_gain_and_crossfade_back() {
+    let (p, h, rx) = setup(OutputMode::BitPerfect);
+    p.send(Command::SetEq(eq(true, [0.0; 10], -12.0, None)));
+    p.send(Command::SetReplayGain(ReplayGainMode::Track));
+    p.send(Command::SetCrossfade(1.0));
+    p.send(Command::SetQueue { items: vec![rg_entry("flac16_44k.flac", -6.0206)], start: 0 });
+    p.send(Command::Play(None));
+    // Bit-perfect: the source's samples, untouched, with every DSP stage bypassed.
+    let sp = pull_until_signal_path(&h, &rx, |_| true);
+    assert!(sp.bit_perfect);
+    for kind in [StageKind::ReplayGain, StageKind::Eq, StageKind::Crossfade] {
+        let st = sp.stages.iter().find(|s| s.kind == kind).unwrap();
+        assert_eq!((st.active, st.detail.as_str()), (false, "bypassed (bit-perfect)"), "{kind:?}");
+    }
+    pull_frames(&h, 4_410);
+    let src = read_f32le("pcm16_44k.f32le");
+    let got = h.recorded();
+    assert!(got.len() >= 4_410 * 4);
+    let expect: Vec<u8> = src[..got.len() / 2].iter().flat_map(|v| ((v * 32_768.0).round() as i16).to_le_bytes()).collect();
+    assert!(got == expect, "bit-perfect bytes are the source's");
+
+    // Back to processed: the stream restarts and all three stages are live again.
+    p.send(Command::SetMode(OutputMode::Processed));
+    let sp = pull_until_signal_path(&h, &rx, |s| !s.bit_perfect);
+    for (kind, detail) in [(StageKind::ReplayGain, "-6.0 dB (track)"), (StageKind::Eq, "Custom"), (StageKind::Crossfade, "1 s")] {
+        let st = sp.stages.iter().find(|s| s.kind == kind).unwrap();
+        assert_eq!((st.active, st.detail.as_str()), (true, detail), "{kind:?}");
+    }
+    assert_eq!(h.opened().last().unwrap().0.sample, engine_core::output::format::DeviceSample::F32, "a processed stream");
+    h.clear_recorded();
+    pull_frames(&h, 8_820);
+    let want = peak(&src.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>()) * 0.251_189 * 0.5;
+    let got = peak(&h.recorded());
+    assert!((got / want - 1.0).abs() < 0.03, "-12 dB preamp and -6 dB ReplayGain: peak {got:.5}, want {want:.5}");
 }
 
 const GAP_A: usize = 110_583;
@@ -684,7 +751,9 @@ fn removing_the_incoming_track_during_crossfade_resyncs() {
     p.send(Command::SetCrossfade(1.0));
     play_entries(&p, vec![album_entry("gap_a.flac", None, None), album_entry("gap_b.flac", None, None), album_entry("short_a.flac", None, None)]);
     pull_frames(&h, 4_410);
-    std::thread::sleep(Duration::from_millis(300)); // the decoder is already into gap_a's tail (it is 2.5 s, the ring holds 2 s)
+    // The ring is full (2 s, minus the feeder's free-space margin): 4_410 + 88_200 written is past the point
+    // where gap_a's last 2 s (overlap + lead) begin, so the crossfade state exists and its mix is under way.
+    wait_buffered(&h, 80_000);
     let gap_b = p.state().queue_item_id.unwrap() + 1;
     p.send(Command::Remove(vec![gap_b]));
     // Pull only once the edit (and its same-position resync) is applied: a pull racing the resync
