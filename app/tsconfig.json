@@ -6,11 +6,12 @@
     "jsx": "react-jsx",
     "strict": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "skipLibCheck": true,
     "isolatedModules": true,
     "types": ["node", "vite/client"],
     "baseUrl": ".",
     "paths": { "@shared/*": ["src/shared/*"], "@protocol/*": ["../shared/protocol/*"] }
   },
-  "include": ["src", "test", "e2e", "../shared/protocol", "*.config.ts"]
+  "include": ["src", "test", "e2e", "build-tools", "../shared/protocol", "*.config.ts"]
 }
