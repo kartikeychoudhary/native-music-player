@@ -211,13 +211,15 @@ pub fn run(opts: RunOptions) -> i32 {
             Err(e) => reply(&out, id, Err(e)),
         }
     }
-    io.shutdown();
     stop_saver.store(true, SeqCst);
     if let Some(j) = saver { let _ = j.join(); }
+    // Save before io.shutdown(): that waits for a queued lyrics job, which can outlast the supervisor's 3 s kill.
     if let Some(dir) = &opts.data_dir {
         let snap = session::snapshot(&ctx.queue.lock().unwrap_or_else(|p| p.into_inner()), &ctx.player.state());
         if let Err(e) = session::save(dir, &snap) { tracing::warn!(error = %e, "couldn't save session.json"); }
     }
+    // The io worker stops before the library, so it never outlives it.
+    io.shutdown();
     if let Some(svc) = &library { svc.shutdown(); }
     ctx.player.shutdown();
     0
