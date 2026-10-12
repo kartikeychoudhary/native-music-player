@@ -5,8 +5,14 @@ import { fileURLToPath } from 'node:url'
 import { REPO_ROOT } from './versions.ts'
 
 export interface LicenseText { file: string; text: string }
-export interface Component { source: 'cargo' | 'npm'; name: string; version: string; license: string | null; texts: LicenseText[] }
-export interface CargoPackage { id: string; name: string; version: string; license: string | null; manifest_path: string; source: string | null }
+export interface Component {
+  source: 'cargo' | 'npm'; name: string; version: string; license: string | null; texts: LicenseText[]
+  /** Cargo.toml `authors`, the only copyright source for the canonical fallback. */
+  authors?: string[]
+  /** The license chosen from a multi-license expression, when it matters to the reader (set by fallbackText). */
+  elected?: string
+}
+export interface CargoPackage { id: string; name: string; version: string; license: string | null; manifest_path: string; source: string | null; authors?: string[] }
 export interface CargoMetadata { packages: CargoPackage[]; resolve: { root: string | null; nodes: { id: string; deps: { pkg: string; dep_kinds: { kind: string | null }[] }[] }[] } }
 export interface NpmPackage { name: string; version: string; license: string | null; dir: string }
 
@@ -39,13 +45,19 @@ export const REQUIRED_TEXTS_FDK = ['fdk-aac-sys']
 
 const TEXT_FILE = /^(licen[cs]e|copying|notice|copyright|unlicense)([.-].*)?$/i
 
+// Expression helpers: split on top-level OR, then AND; parentheses are evaluated recursively.
+const balanced = (s: string) => { let d = 0; for (const c of s) { if (c === '(') d++; if (c === ')' && --d < 0) return false } return d === 0 }
+const strip = (s: string) => { s = s.trim(); while (s.startsWith('(') && s.endsWith(')') && balanced(s.slice(1, -1))) s = s.slice(1, -1).trim(); return s }
+const split = (s: string, op: string) => { const parts: string[] = []; let d = 0, start = 0; const re = new RegExp(`\\s${op}\\s`, 'y'); for (let i = 0; i < s.length; i++) { if (s[i] === '(') d++; else if (s[i] === ')') d--; else if (d === 0) { re.lastIndex = i; const m = re.exec(s); if (m) { parts.push(s.slice(start, i)); start = i + m[0].length; i = start - 1 } } } parts.push(s.slice(start)); return parts }
+
+/** The top-level OR branches of a license expression ("MIT/Apache-2.0" counts as OR), parentheses stripped. */
+function orBranches(expr: string): string[] {
+  return split(expr.trim().replace(/\s*\/\s*/g, ' OR '), 'OR').map(strip)
+}
+
 export function licenseOk(expr: string | null): boolean {
   if (!expr) return false
   const e = expr.trim().replace(/\s*\/\s*/g, ' OR ')
-  // Split on top-level OR, then AND; parentheses are evaluated recursively.
-  const strip = (s: string) => { s = s.trim(); while (s.startsWith('(') && s.endsWith(')') && balanced(s.slice(1, -1))) s = s.slice(1, -1).trim(); return s }
-  const balanced = (s: string) => { let d = 0; for (const c of s) { if (c === '(') d++; if (c === ')' && --d < 0) return false } return d === 0 }
-  const split = (s: string, op: string) => { const parts: string[] = []; let d = 0, start = 0; const re = new RegExp(`\\s${op}\\s`, 'y'); for (let i = 0; i < s.length; i++) { if (s[i] === '(') d++; else if (s[i] === ')') d--; else if (d === 0) { re.lastIndex = i; const m = re.exec(s); if (m) { parts.push(s.slice(start, i)); start = i + m[0].length; i = start - 1 } } } parts.push(s.slice(start)); return parts }
   const ok = (s: string): boolean => {
     s = strip(s)
     const ors = split(s, 'OR'); if (ors.length > 1) return ors.some(ok)
@@ -65,7 +77,7 @@ export function cargoComponents(meta: CargoMetadata, readTexts: (dir: string, ex
     const pkg = byId.get(id)!
     if (pkg.source !== null) {
       const license = LICENSE_OVERRIDES[pkg.name] ?? pkg.license
-      out.push({ source: 'cargo', name: pkg.name, version: pkg.version, license, texts: readTexts(dirname(pkg.manifest_path), EXTRA_TEXTS[pkg.name]) })
+      out.push({ source: 'cargo', name: pkg.name, version: pkg.version, license, texts: readTexts(dirname(pkg.manifest_path), EXTRA_TEXTS[pkg.name]), authors: pkg.authors ?? [] })
     }
     for (const d of nodes.get(id)?.deps ?? []) if (d.dep_kinds.some((k) => k.kind === null)) walk(d.pkg)
   }
@@ -80,12 +92,33 @@ export function npmComponents(pkgs: NpmPackage[], readTexts: (dir: string) => Li
 }
 
 export function render(components: Component[]): string {
-  const head = 'Aurora includes the following third-party software. Each component is listed with its license\nand the license texts its authors ship. Electron and Chromium licenses are in LICENSES.chromium.html\nnext to the Aurora executable.\n'
+  const head = 'Aurora includes the following third-party software. Each component is listed with its license\nand the license texts its authors ship. Where a package ships no license file, the canonical text of its\nlicense is given instead (marked as such, with the copyright holders from its Cargo.toml), and where a license\noffers a choice, the one elected is shown. Electron and Chromium licenses are in LICENSES.chromium.html\nnext to the Aurora executable.\n'
   const body = components.map((c) => [
-    '='.repeat(78), `${c.name} ${c.version} (${c.source === 'cargo' ? 'Rust crate' : 'npm package'})`, `License: ${c.license ?? 'see text below'}`, '',
+    '='.repeat(78), `${c.name} ${c.version} (${c.source === 'cargo' ? 'Rust crate' : 'npm package'})`, `License: ${c.license ?? 'see text below'}`, ...(c.elected ? [`Elected: ${c.elected}`] : []), '',
     ...c.texts.flatMap((t) => [`--- ${t.file} ---`, t.text.trim(), '']),
   ].join('\n'))
   return `${head}\n${body.join('\n')}\n`
+}
+
+/** Licenses that ask for no attribution: a component offering one of these as an OR branch needs no shipped text. */
+const NO_ATTRIBUTION = ['CC0-1.0', 'Unlicense', '0BSD', 'MIT-0']
+
+/**
+ * What to ship for an allowed-license component that comes with no license file, or null when there is
+ * no honest fallback (a human must look): an OR branch needing no attribution is elected and needs no
+ * text; otherwise an MIT branch gets the canonical MIT text with the copyright line built from the
+ * Cargo.toml authors (null if there are none).
+ */
+export function fallbackText(c: Component, mitTemplate: string): { texts: LicenseText[]; elected?: string } | null {
+  if (!c.license) return null
+  const branches = orBranches(c.license)
+  const free = NO_ATTRIBUTION.find((id) => branches.includes(id))
+  if (free) return { texts: [], elected: `${free} (no attribution required)` }
+  const authors = c.authors ?? []
+  if (!branches.includes('MIT') || authors.length === 0) return null
+  const text = mitTemplate.replace('{{copyright}}', `Copyright (c) ${authors.join(', ')}`)
+  const file = 'MIT (canonical text: the crate ships no license file; copyright from its Cargo.toml authors)'
+  return { texts: [{ file, text }], ...(branches.length > 1 ? { elected: 'MIT' } : {}) }
 }
 
 export function readTexts(dir: string, extra: string[] = []): LicenseText[] {
@@ -178,10 +211,15 @@ function main(argv: string[]): number {
   const cargo = [...merged.values()].sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version))
   const npm = npmComponents(npmPackages(), (dir) => readTexts(dir))
 
+  const mitTemplate = readFileSync(join(REPO_ROOT, 'app/build-tools/license-texts/MIT.txt'), 'utf8')
   const problems: string[] = []
   for (const c of [...cargo, ...npm]) {
     if (c.license !== null && !licenseOk(c.license)) problems.push(`${c.name} ${c.version}: license "${c.license}" not allowed`)
     else if (c.license === null && c.texts.length === 0) problems.push(`${c.name} ${c.version}: no license text`)
+    else if (c.texts.length === 0) {
+      const fb = fallbackText(c, mitTemplate)
+      if (fb) { c.texts = fb.texts; c.elected = fb.elected } else problems.push(`${c.name} ${c.version}: no license text and no canonical fallback`)
+    }
   }
   for (const name of [...REQUIRED_TEXTS, ...(noFdk ? [] : REQUIRED_TEXTS_FDK)]) {
     const found = cargo.filter((c) => c.name === name)

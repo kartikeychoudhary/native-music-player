@@ -1,6 +1,7 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { packageOf } from '../build-tools/bundledPackages.ts'
-import { cargoComponents, licenseOk, npmComponents, render, type CargoMetadata } from '../build-tools/licenses.ts'
+import { cargoComponents, fallbackText, licenseOk, npmComponents, render, type CargoMetadata, type Component } from '../build-tools/licenses.ts'
 
 describe('bundled package paths', () => {
   it('finds the package of a module id, scoped, nested, Windows or POSIX', () => {
@@ -65,5 +66,43 @@ describe('components', () => {
     expect(out).toContain('a 1.0.0 (Rust crate)')
     expect(out).toContain('License: MIT')
     expect(out).toContain('Permission is hereby granted')
+  })
+})
+
+describe('fallback text for components that ship no license file', () => {
+  const template = 'MIT License\n\n{{copyright}}\n\nPermission is hereby granted'
+  const bare = (license: string, authors: string[] = ['A. Author', 'B. Writer']): Component => ({ source: 'cargo', name: 'x', version: '1.0.0', license, texts: [], authors })
+
+  it('uses the canonical MIT text with the Cargo.toml authors as the copyright line', () => {
+    const got = fallbackText(bare('MIT'), template)
+    expect(got?.elected).toBeUndefined()
+    expect(got?.texts).toHaveLength(1)
+    expect(got?.texts[0].file).toBe('MIT (canonical text: the crate ships no license file; copyright from its Cargo.toml authors)')
+    expect(got?.texts[0].text).toContain('Copyright (c) A. Author, B. Writer')
+    expect(got?.texts[0].text).toContain('Permission is hereby granted')
+    expect(got?.texts[0].text).not.toContain('{{copyright}}')
+  })
+  it('says MIT was elected when the expression offers other licenses too', () => {
+    const got = fallbackText(bare('MIT OR Apache-2.0'), template)
+    expect(got?.elected).toBe('MIT')
+    expect(got?.texts[0].text).toContain('Copyright (c) A. Author, B. Writer')
+  })
+  it('needs no text when a branch requires no attribution, and says which was elected', () => {
+    expect(fallbackText(bare('CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception', []), template)).toEqual({ texts: [], elected: 'CC0-1.0 (no attribution required)' })
+    expect(fallbackText(bare('Unlicense/MIT'), template)).toEqual({ texts: [], elected: 'Unlicense (no attribution required)' })
+  })
+  it('fails when no fallback applies: no MIT branch, or MIT without authors', () => {
+    expect(fallbackText(bare('Apache-2.0'), template)).toBeNull()
+    expect(fallbackText(bare('MIT OR Apache-2.0', []), template)).toBeNull()
+    expect(fallbackText(bare('MIT AND Zlib'), template)).toBeNull()
+  })
+  it('renders the elected license', () => {
+    const out = render([{ ...bare('CC0-1.0 OR Apache-2.0'), elected: 'CC0-1.0 (no attribution required)' }])
+    expect(out).toContain('Elected: CC0-1.0 (no attribution required)')
+  })
+  it('has a committed MIT template with the copyright placeholder', () => {
+    const t = readFileSync(new URL('../build-tools/license-texts/MIT.txt', import.meta.url), 'utf8')
+    expect(t).toContain('{{copyright}}')
+    expect(t).toContain('Permission is hereby granted, free of charge')
   })
 })
