@@ -42,6 +42,9 @@ test('the packaged app starts its bundled engine, plays a file and shows its bui
     await expect.poll(() => win.evaluate(() => (window as unknown as { aurora: { call: (m: string, a: unknown) => Promise<{ status: string }> } }).aurora.call('player.state', {}).then((s) => s.status)), { timeout: 15_000 }).toBe('playing')
     await win.getByRole('link', { name: 'Settings' }).click()
     await expect(win.getByText(`Aurora ${version}`)).toBeVisible()
+    // S.buildTarget renders `<platform>-<arch>` and appends ` · without fdk-aac` for the no-fdk variant.
+    if (variant === 'nofdk') await expect(win.getByText('without fdk-aac')).toBeVisible()
+    else await expect(win.getByText('without fdk-aac')).toHaveCount(0)
     await expect(win.getByText(variant === 'standard' ? 'Included (Fraunhofer FDK AAC)' : 'Not in this build')).toBeVisible()
   } finally {
     await app.close()

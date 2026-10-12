@@ -98,9 +98,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: windows-2025, os: windows, platform: win32, exe: dist/win-unpacked/Aurora.exe }
-          - { runner: macos-15, os: macos, platform: darwin, exe: dist/mac-arm64/Aurora.app/Contents/MacOS/Aurora }
-          - { runner: ubuntu-22.04, os: linux, platform: linux, exe: dist/linux-unpacked/aurora }
+          - { runner: windows-2025, os: windows, platform: win32, exe: dist/win-unpacked/Aurora.exe, exe_nofdk: dist-nofdk/win-unpacked/Aurora.exe }
+          - { runner: macos-15, os: macos, platform: darwin, exe: dist/mac-arm64/Aurora.app/Contents/MacOS/Aurora, exe_nofdk: dist-nofdk/mac-arm64/Aurora.app/Contents/MacOS/Aurora }
+          - { runner: ubuntu-22.04, os: linux, platform: linux, exe: dist/linux-unpacked/aurora, exe_nofdk: dist-nofdk/linux-unpacked/aurora }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     defaults: { run: { shell: bash } }
@@ -114,7 +114,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y rpm xvfb
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          # The key is absent or irrelevant on ubuntu-22.04 kernels, and the job must not fail on it.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - uses: actions/download-artifact@v4
         with: { pattern: 'engine-${{ matrix.platform }}-*', path: artifacts }
       - name: Unpack engines
@@ -142,6 +143,14 @@ jobs:
       - name: Smoke test the packaged app (Windows, macOS)
         if: matrix.os != 'linux'
         env: { AURORA_PACKAGED_EXE: '${{ matrix.exe }}' }
+        run: npm --prefix app run e2e:packaged
+      - name: Smoke test the no-fdk package (Linux)
+        if: matrix.os == 'linux'
+        env: { AURORA_PACKAGED_EXE: '${{ matrix.exe_nofdk }}', AURORA_EXPECT_VARIANT: nofdk }
+        run: xvfb-run -a npm --prefix app run e2e:packaged
+      - name: Smoke test the no-fdk package (Windows, macOS)
+        if: matrix.os != 'linux'
+        env: { AURORA_PACKAGED_EXE: '${{ matrix.exe_nofdk }}', AURORA_EXPECT_VARIANT: nofdk }
         run: npm --prefix app run e2e:packaged
       # upload-artifact keeps the folders above the files when the paths differ (app/dist and
       # app/dist-nofdk), and the release job expects a flat list, so gather the files first.

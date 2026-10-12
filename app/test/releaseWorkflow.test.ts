@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
 
-type Step = { uses?: string; run?: string; with?: Record<string, unknown>; name?: string }
+type Step = { uses?: string; run?: string; with?: Record<string, unknown>; env?: Record<string, string>; name?: string }
 type Job = { needs?: string | string[]; permissions?: Record<string, string>; strategy?: { matrix: { include: Record<string, string>[] } }; steps: Step[]; if?: string }
 const wf = parse(readFileSync(join(__dirname, '../../.github/workflows/release.yml'), 'utf8')) as { on: Record<string, unknown>; permissions: Record<string, string>; jobs: Record<string, Job> }
 
@@ -37,5 +37,21 @@ describe('release workflow', () => {
     expect(wf.jobs.engine.steps.some((s) => s.run?.includes('check-engine-deps.sh'))).toBe(true)
     expect(wf.jobs.engine.steps.some((s) => s.run?.includes('engine.ready'))).toBe(true)
     expect(wf.jobs.package.steps.some((s) => s.run?.includes('e2e:packaged'))).toBe(true)
+  })
+  it('does not fail the Linux package job on the AppArmor sysctl', () => {
+    const sysctl = wf.jobs.package.steps.flatMap((s) => s.run?.split(/\r?\n/) ?? []).filter((l) => l.includes('apparmor_restrict_unprivileged_userns'))
+    expect(sysctl).toHaveLength(1)
+    expect(sysctl[0]).toMatch(/\|\| true\s*$/)
+  })
+  it('also smoke-tests the no-fdk package, from its own unpacked app, on every OS', () => {
+    const matrix = wf.jobs.package.strategy!.matrix.include
+    for (const m of matrix) expect(m.exe_nofdk).toMatch(/^dist-nofdk\//)
+    const smokes = wf.jobs.package.steps.filter((s) => s.env?.AURORA_EXPECT_VARIANT === 'nofdk')
+    expect(smokes.length).toBeGreaterThanOrEqual(2) // Linux under xvfb, Windows and macOS without
+    for (const s of smokes) {
+      expect(s.run).toContain('e2e:packaged')
+      expect(s.env!.AURORA_PACKAGED_EXE).toBe('${{ matrix.exe_nofdk }}')
+    }
+    expect(smokes.some((s) => s.run!.startsWith('xvfb-run -a '))).toBe(true)
   })
 })

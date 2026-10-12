@@ -12,7 +12,7 @@ case "$os" in
   macos)   libs=$("$objdump" --macho --dylibs-used "$bin" | tail -n +2 | awk '{print $1}')
            bad=$(echo "$libs" | grep -vE '^(/usr/lib/|/System/Library/)' || true) ;;
   linux)   libs=$("$objdump" -p "$bin" | sed -n 's/^ *NEEDED *//p')
-           bad=$(echo "$libs" | grep -vE '^(libc|libm|libdl|librt|libpthread|libgcc_s|ld-linux[-.a-z0-9_]*|libasound|libpipewire-0\.3)\.so' || true) ;;
+           bad=$(echo "$libs" | grep -vE '^(libc|libm|libdl|librt|libpthread|libgcc_s|libstdc\+\+|ld-linux[-.a-z0-9_]*|libasound|libpipewire-0\.3)\.so' || true) ;;
   *) echo "unknown os $os"; exit 2 ;;
 esac
 # Every real engine links something; an empty list means a wrong os argument or an unreadable binary.
