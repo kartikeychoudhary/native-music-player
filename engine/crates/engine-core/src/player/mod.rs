@@ -503,14 +503,18 @@ impl Player {
         vec![eq_stage(&self.eq_settings, dsp_allowed)]
     }
 
-    /// Rebuilds the DSP stages of the audible track's signal path after a setting changed, and sends it.
+    /// Rewrites the DSP stages of every held track's signal path after a setting changed. Tracks decoded
+    /// ahead (gapless) get the new stages too, so they show them when they become audible. Only the
+    /// audible track's signal path is sent now.
     fn refresh_dsp_stages(&mut self) {
         let allowed = self.dsp_allowed();
-        let fresh = self.dsp_stages(allowed);
-        if let Some(m) = self.markers.front_mut() {
+        let fresh: Vec<Vec<Stage>> = self.markers.iter().map(|_| self.dsp_stages(allowed)).collect();
+        for (m, fresh) in self.markers.iter_mut().zip(fresh) {
             m.signal.stages.retain(|s| !matches!(s.kind, StageKind::ReplayGain | StageKind::Eq | StageKind::Crossfade));
             let at = m.signal.stages.iter().position(|s| s.kind == StageKind::Volume).unwrap_or(m.signal.stages.len());
             for (i, st) in fresh.into_iter().enumerate() { m.signal.stages.insert(at + i, st); }
+        }
+        if let Some(m) = self.markers.front() {
             let _ = self.events.send(PlayerEvent::SignalPath(m.signal.clone()));
         }
     }

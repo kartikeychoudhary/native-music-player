@@ -468,3 +468,20 @@ fn eq_stage_names_the_preset_and_follows_changes() {
     p.send(Command::SetEq(eq(true, [0.0, 0.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 0.0], 0.0, None)));
     assert_eq!(eq_stage(&rx).detail, "Custom");
 }
+
+#[test]
+fn eq_stage_change_reaches_a_track_that_is_queued_but_not_yet_audible() {
+    let (p, h, rx) = setup(OutputMode::Processed);
+    queue(&p, &["gap_a.flac", "gap_b.flac"]);
+    pull_frames(&h, 44_100);
+    std::thread::sleep(Duration::from_millis(300)); // the ring has filled past gap_a's end: gap_b's marker exists
+    let _ = rx.try_iter().count();
+    p.send(Command::SetEq(eq(true, [6.0, 5.0, 4.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 0.0, Some("Bass"))));
+    let events = run_to_end(&h, &rx);
+    let paths: Vec<SignalPath> = events.into_iter().filter_map(|e| if let PlayerEvent::SignalPath(s) = e { Some(s) } else { None }).collect();
+    assert!(paths.len() >= 2, "gap_a's refresh, then gap_b becoming audible: {} signal paths", paths.len());
+    for sp in [paths.first().unwrap(), paths.last().unwrap()] {
+        let st = sp.stages.iter().find(|s| s.kind == StageKind::Eq).unwrap();
+        assert_eq!((st.active, st.detail.as_str()), (true, "Bass"));
+    }
+}
