@@ -11,6 +11,7 @@ import { EngineSupervisor } from './engine/supervisor'
 import { logDir, logger } from './logs'
 import { safeSend } from './safeSend'
 import { SettingsStore } from './settings'
+import { createTray } from './tray'
 import { createVizHub, hookSender } from './viz'
 import { WindowManager } from './windows'
 
@@ -56,6 +57,25 @@ app.whenReady().then(() => {
     settings, preload: join(__dirname, '../preload/index.js'), page: join(__dirname, '../renderer/index.html'), devUrl: process.env.ELECTRON_RENDERER_URL,
     // Closing the main window quits on Windows/Linux even while the mini-player is open (spec §5.2).
     onMainClosed: () => { if (process.platform !== 'darwin') app.quit() },
+    onVisibilityChange: () => syncWindows(),
+  })
+  const callQuiet = (m: 'player.toggle' | 'player.next' | 'player.prev') => { supervisor.call(m, {}).catch(() => {}) }
+  const tray = createTray({
+    toggle: () => callQuiet('player.toggle'), next: () => callQuiet('player.next'), prev: () => callQuiet('player.prev'),
+    toggleMain: () => windows.toggleMainVisible(),
+    toggleMini: () => windows.toggleMini(),
+    quit: () => app.quit(),
+  })
+  // Deferred a tick: a window's isVisible() settles just after its show/hide event.
+  const syncWindows = () => setTimeout(() => {
+    const main = windows.main
+    tray.update({ mainVisible: !!main && !main.isDestroyed() && main.isVisible() && !main.isMinimized(), miniOpen: windows.miniOpen })
+  }, 0)
+  supervisor.on('notification', (m: string, p: unknown) => {
+    if (m !== 'player.state') return
+    const s = p as { status: string; track: { title: string; artist: string | null } | null }
+    const stopped = s.status === 'stopped'
+    tray.update({ playing: s.status === 'playing', title: stopped ? null : s.track?.title ?? null, artist: stopped ? null : s.track?.artist ?? null })
   })
   const engineLog = logger('engine.log')
   supervisor.on('log', engineLog)
@@ -115,8 +135,8 @@ app.whenReady().then(() => {
     viz.set(id, on === true)
     hookSender(e.sender, viz, hookedSenders)
   })
-  ipcMain.handle('aurora:toggleMini', () => windows.toggleMini())
-  ipcMain.handle('aurora:showMain', () => windows.showMain())
+  ipcMain.handle('aurora:toggleMini', () => { windows.toggleMini(); syncWindows() })
+  ipcMain.handle('aurora:showMain', () => { windows.showMain(); syncWindows() })
   ipcMain.handle('aurora:openLogs', async () => { await shell.openPath(logDir()) })
 
   supervisor.start()

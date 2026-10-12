@@ -24,8 +24,13 @@ export class WindowManager {
   private mainW: Managed | null = null
   private miniW: Managed | null = null
 
-  /** `onMainClosed` runs when the main window closes (index.ts quits there on Windows/Linux, spec §5.2). */
-  constructor(private o: { settings: SettingsStore; preload: string; page: string; devUrl?: string; onMainClosed?: () => void }) {}
+  /**
+   * `onMainClosed` runs when the main window closes (index.ts quits there on Windows/Linux, spec §5.2).
+   * `onVisibilityChange` runs when the main window shows, hides, minimizes, restores or closes, and when the mini-player opens or closes (the tray's labels follow it).
+   */
+  constructor(private o: { settings: SettingsStore; preload: string; page: string; devUrl?: string; onMainClosed?: () => void; onVisibilityChange?: () => void }) {}
+
+  private changed() { this.o.onVisibilityChange?.() }
 
   get main(): BrowserWindow | null { return this.mainW?.win ?? null }
   get miniOpen(): boolean { return !!this.miniW }
@@ -71,7 +76,11 @@ export class WindowManager {
     if (visible && saved.maximized) win.maximize()
     win.once('ready-to-show', () => win.show())
     win.on('close', () => this.saveMainBounds())
-    this.mainW = this.manage(win, () => { this.mainW = null; this.o.onMainClosed?.() })
+    win.on('show', () => this.changed())
+    win.on('hide', () => this.changed())
+    win.on('minimize', () => this.changed())
+    win.on('restore', () => this.changed())
+    this.mainW = this.manage(win, () => { this.mainW = null; this.changed(); this.o.onMainClosed?.() })
     this.load(win, '')
   }
 
@@ -90,7 +99,8 @@ export class WindowManager {
     })
     win.once('ready-to-show', () => win.show())
     win.on('moved', () => { const [x, y] = win.getPosition(); this.o.settings.update({ miniBounds: { x, y } }) })
-    this.miniW = this.manage(win, () => { this.miniW = null })
+    this.miniW = this.manage(win, () => { this.miniW = null; this.changed() })
+    this.changed()
     this.load(win, '/mini')
   }
 
