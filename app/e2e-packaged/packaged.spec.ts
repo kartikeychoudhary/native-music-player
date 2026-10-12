@@ -22,7 +22,9 @@ test.skip(!exe, 'set AURORA_PACKAGED_EXE to the packaged executable')
 test('the packaged app starts its bundled engine, plays a file and shows its build in About', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'aurora-packaged-'))
   const wav = join(dir, 'sine 440 ü.wav'); sineWav(wav)
-  const app = await electron.launch({ executablePath: resolve(exe!), args: [`--user-data-dir=${join(dir, 'userData')}`], env: { ...process.env, AURORA_OUTPUT: 'null', AURORA_OSMEDIA: '0' } })
+  // Without the dev overrides, so the app can only run the engine it bundles.
+  const { AURORA_ENGINE_PATH: _path, AURORA_ENGINE_PROFILE: _profile, ...env } = process.env
+  const app = await electron.launch({ executablePath: resolve(exe!), args: [`--user-data-dir=${join(dir, 'userData')}`], env: { ...env, AURORA_OUTPUT: 'null', AURORA_OSMEDIA: '0' } })
   try {
     expect(await app.evaluate(({ app }) => app.getPath('userData')), 'the smoke test must not touch the real profile').toBe(join(dir, 'userData'))
     const win = await app.firstWindow()

@@ -27,4 +27,10 @@ describe('install kind', () => {
     expect(yml).toContain(`appId: ${APP_ID}`)
     expect(yml).toMatch(/owner: kartikeychoudhary\s+repo: native-music-player/)
   })
+  it('gives Linux packages the homepage and maintainer they require', () => {
+    const pkg = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8')) as { homepage?: string; author?: { name?: string; email?: string } }
+    expect(pkg.homepage?.startsWith('https://github.com/kartikeychoudhary/native-music-player')).toBe(true)
+    expect(pkg.author?.name).toBeTruthy()
+    expect(pkg.author?.email).toBeTruthy()
+  })
 })

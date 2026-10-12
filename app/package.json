@@ -5,6 +5,11 @@
   "private": true,
   "description": "Aurora: a native hi-res music player",
   "license": "MIT",
+  "homepage": "https://github.com/kartikeychoudhary/native-music-player",
+  "author": {
+    "name": "Kartikey Choudhary",
+    "email": "kartikey31choudhary@gmail.com"
+  },
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",

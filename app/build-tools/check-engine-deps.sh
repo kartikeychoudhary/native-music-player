@@ -15,5 +15,7 @@ case "$os" in
            bad=$(echo "$libs" | grep -vE '^(libc|libm|libdl|librt|libpthread|libgcc_s|ld-linux[-.a-z0-9_]*|libasound|libpipewire-0\.3)\.so' || true) ;;
   *) echo "unknown os $os"; exit 2 ;;
 esac
+# Every real engine links something; an empty list means a wrong os argument or an unreadable binary.
+[ -n "$libs" ] || { echo "no linked libraries found in $bin as a $os binary (wrong os argument?)"; exit 1; }
 echo "$bin links:"; echo "$libs" | sed 's/^/  /'
 if [ -n "$bad" ]; then echo "not allowed:"; echo "$bad" | sed 's/^/  /'; exit 1; fi
