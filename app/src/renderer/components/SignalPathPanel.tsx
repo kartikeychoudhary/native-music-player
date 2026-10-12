@@ -2,7 +2,7 @@ import type { SignalPath } from '@protocol/SignalPath'
 import { bitPerfectLabel, bluetoothLabel, codecLabel, khz } from '../lib/format'
 import s from './SignalPathPanel.module.css'
 
-const STAGE_TITLE: Record<string, string> = { dsd: 'DSD', channels: 'Channels', resampler: 'Resampler', volume: 'Volume', dither: 'Dither' }
+const STAGE_TITLE: Record<string, string> = { dsd: 'DSD', channels: 'Channels', resampler: 'Resampler', volume: 'Volume', dither: 'Dither', replaygain: 'ReplayGain', eq: 'EQ', crossfade: 'Crossfade' }
 
 function Node({ title, active = true, children, testId }: { title: string; active?: boolean; children: React.ReactNode; testId?: string }) {
   return (

@@ -34,6 +34,18 @@ describe('SignalPathPanel', () => {
     expect(screen.getByText('Bit-perfect to OS')).toBeTruthy()
   })
 
+  it('titles the DSP stages by name', () => {
+    const stages = [
+      { kind: 'replaygain', active: true, detail: '-6.2 dB (track)' },
+      { kind: 'eq', active: true, detail: 'Flat' },
+      { kind: 'crossfade', active: true, detail: '4 s' },
+    ]
+    render(<SignalPathPanel signal={{ ...base, stages }} />)
+    for (const title of ['ReplayGain', 'EQ', 'Crossfade']) expect(screen.getByRole('heading', { level: 5, name: title })).toBeTruthy()
+    expect(screen.queryByRole('heading', { level: 5, name: 'REPLAYGAIN' })).toBeNull()
+    expect(screen.queryByRole('heading', { level: 5, name: 'CROSSFADE' })).toBeNull()
+  })
+
   it('renders an empty state with no signal', () => {
     render(<SignalPathPanel signal={null} />)
     expect(screen.getByText(/play something/i)).toBeTruthy()
