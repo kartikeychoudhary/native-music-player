@@ -42,3 +42,31 @@ fn id3_sylt_frames_are_synced_lyrics() {
     assert!(l.synced);
     assert_eq!(l.lines.iter().map(|x| (x.t_ms, x.text.as_str())).collect::<Vec<_>>(), [(Some(1000), "one"), (Some(2500), "two")]);
 }
+
+#[test]
+fn empty_or_metadata_only_sidecars_do_not_hide_embedded_lyrics() {
+    let s = scanned(|root| {
+        tagged("flac16_44k.flac", &root.join("e.flac"), &Tags { title: Some("E"), extra: &[(ItemKey::Lyrics, "embedded one
+embedded two")], ..Default::default() });
+        std::fs::write(root.join("e.lrc"), "").unwrap();
+        tagged("flac16_44k.flac", &root.join("w.flac"), &Tags { title: Some("W"), extra: &[(ItemKey::Lyrics, "embedded one
+embedded two")], ..Default::default() });
+        std::fs::write(root.join("w.lrc"), "  
+
+").unwrap();
+        tagged("flac16_44k.flac", &root.join("m.flac"), &Tags { title: Some("M"), extra: &[(ItemKey::Lyrics, "embedded one
+embedded two")], ..Default::default() });
+        std::fs::write(root.join("m.lrc"), "[ar:Someone]
+[ti:Song]
+").unwrap();
+        tagged("flac16_44k.flac", &root.join("n.flac"), &Tags { title: Some("N"), ..Default::default() });
+        std::fs::write(root.join("n.lrc"), "[ar:Someone]
+").unwrap();
+    });
+    for title in ["E", "W", "M"] {
+        let l = s.lib.lyrics(s.id_of(title)).unwrap().unwrap_or_else(|| panic!("{title}: embedded lyrics were hidden"));
+        assert!(!l.synced, "{title}");
+        assert_eq!(l.lines.iter().map(|x| x.text.as_str()).collect::<Vec<_>>(), ["embedded one", "embedded two"], "{title}");
+    }
+    assert_eq!(s.lib.lyrics(s.id_of("N")).unwrap(), None, "a metadata-only sidecar alone is not lyrics");
+}

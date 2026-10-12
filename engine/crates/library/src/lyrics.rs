@@ -26,7 +26,8 @@ fn parse_time(s: &str) -> Option<u32> {
         Some(f) if !f.is_empty() && f.len() <= 3 && f.bytes().all(|b| b.is_ascii_digit()) => f.parse::<u32>().ok()? * 10u32.pow(3 - f.len() as u32),
         Some(_) => return None,
     };
-    Some(min * 60_000 + sec * 1000 + ms)
+    // Minutes come from arbitrary digit strings: an overflowing time is a malformed tag.
+    min.checked_mul(60_000)?.checked_add(sec * 1000 + ms)
 }
 
 /// Splits enhanced-LRC `<mm:ss.xx>` word tags out of a line's text. Text before the first tag is
@@ -72,7 +73,7 @@ pub fn parse_lrc(text: &str) -> Option<Lyrics> {
         if stamps.is_empty() { continue; }
         let (line_text, line_words) = words(rest);
         for t in stamps {
-            let shift = |t: u32| (t as i64 - offset).max(0) as u32;
+            let shift = |t: u32| (t as i64).saturating_sub(offset).clamp(0, u32::MAX as i64) as u32;
             lines.push(LyricLine {
                 t_ms: Some(shift(t)),
                 text: line_text.clone(),
@@ -91,6 +92,20 @@ pub fn plain(text: &str) -> Lyrics {
     let start = all.iter().position(|l| !l.is_empty()).unwrap_or(all.len());
     let end = all.iter().rposition(|l| !l.is_empty()).map_or(start, |e| e + 1);
     Lyrics { synced: false, lines: all[start..end].iter().map(|l| LyricLine { t_ms: None, text: (*l).to_string(), words: None }).collect() }
+}
+
+/// Plain text of a sidecar `.lrc` that has no time tags: `[ar:..]`/`[ti:..]` style metadata lines
+/// aren't lyrics, so they're dropped (a metadata-only file ends up with no lines at all).
+fn sidecar_plain(text: &str) -> Lyrics {
+    let is_meta = |l: &str| {
+        let l = l.trim();
+        let Some(inner) = l.strip_prefix('[').and_then(|r| r.strip_suffix(']')) else { return false };
+        let Some((key, _)) = inner.split_once(':') else { return false };
+        !key.is_empty() && key.bytes().all(|b| b.is_ascii_alphanumeric()) && !inner.contains(['[', ']']) && parse_time(inner).is_none()
+    };
+    let kept: Vec<&str> = text.lines().filter(|l| !is_meta(l)).collect();
+    plain(&kept.join("
+"))
 }
 
 fn sidecar(path: &Path) -> Option<String> {
@@ -128,13 +143,19 @@ fn sylt(path: &Path) -> Option<Lyrics> {
 pub fn for_file(path: &Path) -> Option<Lyrics> {
     let mut fallback: Option<Lyrics> = None;
     if let Some(t) = sidecar(path) {
-        match parse_lrc(&t) { Some(l) => return Some(l), None => { fallback.get_or_insert_with(|| plain(&t)); } }
+        match parse_lrc(&t) {
+            Some(l) => return Some(l),
+            None => { let p = sidecar_plain(&t); if !p.lines.is_empty() { fallback.get_or_insert(p); } }
+        }
     }
     if let Some(l) = sylt(path) { return Some(l); }
     if let Some(t) = embedded_text(path) {
-        match parse_lrc(&t) { Some(l) => return Some(l), None => { fallback.get_or_insert_with(|| plain(&t)); } }
+        match parse_lrc(&t) {
+            Some(l) => return Some(l),
+            None => { let p = plain(&t); if !p.lines.is_empty() { fallback.get_or_insert(p); } }
+        }
     }
-    fallback.filter(|l| !l.lines.is_empty())
+    fallback
 }
 
 impl crate::Library {
@@ -197,5 +218,47 @@ mod tests {
         let p = plain("\n\nVerse one\nline two\n\nVerse two\n\n");
         assert!(!p.synced);
         assert_eq!(times(&p), [(None, "Verse one"), (None, "line two"), (None, ""), (None, "Verse two")]);
+    }
+
+    #[test]
+    fn oversized_timestamps_and_offsets_never_panic() {
+        // Minutes that overflow u32 milliseconds make the tag malformed, so the line is skipped.
+        let l = parse_lrc("[99999:00]huge
+[71583:00]huge2
+[00:01.00]ok").unwrap();
+        assert_eq!(times(&l), [(Some(1000), "ok")]);
+        assert!(parse_lrc("[99999:00.00]x").is_none());
+        // A fraction wider than 3 digits is malformed, however long.
+        assert!(parse_lrc("[00:01.99999999999999999999]x").is_none());
+        // i64::MIN offset: no overflow, the shifted time is clamped into u32.
+        let l = parse_lrc("[offset:-9223372036854775808]
+[00:01.00]x").unwrap();
+        assert_eq!(times(&l), [(Some(u32::MAX), "x")]);
+        let l = parse_lrc("[offset:-4294967295]
+[00:10.00]<00:11.00>w").unwrap();
+        assert_eq!(l.lines[0].t_ms, Some(u32::MAX));
+        assert_eq!(l.lines[0].words.as_ref().unwrap()[0].t_ms, u32::MAX);
+        let l = parse_lrc("[offset:9223372036854775807]
+[00:01.00]x").unwrap();
+        assert_eq!(times(&l), [(Some(0), "x")]);
+    }
+
+    #[test]
+    fn sidecar_plain_text_drops_bare_metadata_lines() {
+        let p = sidecar_plain("[ar:Someone]
+[ti:Song]
+[offset:+100]
+
+Verse one
+[Chorus]
+line
+");
+        assert_eq!(times(&p), [(None, "Verse one"), (None, "[Chorus]"), (None, "line")]);
+        assert!(sidecar_plain("[ar:x]
+[ti:y]
+").lines.is_empty());
+        assert!(sidecar_plain("  
+
+").lines.is_empty());
     }
 }
