@@ -408,3 +408,63 @@ fn interrupting_playback_fades_out_instead_of_cutting() {
         assert!(worst < natural * 2.0, "{label}: a {worst:.4} jump at the interruption; the music itself moves at most {natural:.4}");
     }
 }
+
+fn eq(enabled: bool, bands: [f32; 10], preamp: f32, preset: Option<&str>) -> EqSettings {
+    EqSettings { enabled, bands: bands.to_vec(), preamp, preset: preset.map(Into::into) }
+}
+
+fn peak(bytes: &[u8]) -> f32 { f32s(bytes).iter().fold(0f32, |m, v| m.max(v.abs())) }
+
+#[test]
+fn eq_changes_are_heard_immediately_not_after_the_buffer() {
+    let (p, h, rx) = setup(OutputMode::Processed);
+    queue(&p, &["flac16_44k.flac"]);
+    pull_frames(&h, 22_050);
+    std::thread::sleep(Duration::from_millis(200)); // the ring now holds ~2 s decoded without EQ
+    let before = peak(&h.recorded());
+    p.send(Command::SetEq(eq(true, [0.0; 10], -12.0, None)));
+    let start = Instant::now();
+    while !rx.try_iter().any(|e| matches!(e, PlayerEvent::SignalPath(s) if s.stages.iter().any(|st| st.kind == StageKind::Eq && st.active))) {
+        assert!(start.elapsed() < Duration::from_secs(5));
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    h.clear_recorded();
+    pull_frames(&h, 4_410);
+    let ratio = peak(&h.recorded()) / before;
+    assert!((ratio - 0.251).abs() < 0.03, "-12 dB within 100 ms of buffered audio, got x{ratio:.3}");
+}
+
+#[test]
+fn bit_perfect_ignores_eq() {
+    let (p, h, rx) = setup(OutputMode::BitPerfect);
+    p.send(Command::SetEq(eq(true, [6.0, 5.0, 4.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], -6.0, Some("Bass"))));
+    queue(&p, &["flac24_96k.flac"]);
+    let events = run_to_end(&h, &rx);
+    let expected: Vec<u8> = read_s32le("pcm24_96k.s32le").iter().flat_map(|s| (s >> 8).to_le_bytes()[..3].to_vec()).collect();
+    assert_eq!(h.recorded(), expected);
+    let sp = events.iter().find_map(|e| if let PlayerEvent::SignalPath(s) = e { Some(s.clone()) } else { None }).unwrap();
+    let st = sp.stages.iter().find(|s| s.kind == StageKind::Eq).unwrap();
+    assert_eq!((st.active, st.detail.as_str()), (false, "bypassed (bit-perfect)"));
+}
+
+#[test]
+fn eq_stage_names_the_preset_and_follows_changes() {
+    let (p, h, rx) = setup(OutputMode::Processed);
+    p.send(Command::SetEq(eq(true, [6.0, 5.0, 4.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 0.0, Some("Bass"))));
+    queue(&p, &["flac16_44k.flac"]);
+    let eq_stage = |rx: &Receiver<PlayerEvent>| {
+        let start = Instant::now();
+        loop {
+            assert!(start.elapsed() < Duration::from_secs(5));
+            pull_frames(&h, 256);
+            if let Some(st) = rx.try_iter().filter_map(|e| if let PlayerEvent::SignalPath(s) = e { s.stages.into_iter().find(|s| s.kind == StageKind::Eq) } else { None }).last() { return st; }
+        }
+    };
+    let st = eq_stage(&rx);
+    assert_eq!((st.active, st.detail.as_str()), (true, "Bass"));
+    p.send(Command::SetEq(eq(false, [6.0, 5.0, 4.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 0.0, Some("Bass"))));
+    let st = eq_stage(&rx);
+    assert_eq!((st.active, st.detail.as_str()), (false, "off"));
+    p.send(Command::SetEq(eq(true, [0.0, 0.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 0.0], 0.0, None)));
+    assert_eq!(eq_stage(&rx).detail, "Custom");
+}

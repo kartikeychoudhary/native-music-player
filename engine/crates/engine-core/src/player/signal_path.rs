@@ -11,7 +11,7 @@ fn khz(r: u32) -> String {
     if (k - k.round()).abs() < 1e-9 { format!("{}", k as u32) } else { format!("{k:.1}") }
 }
 
-pub fn build_signal_path(src: &SourceInfo, plan: &PipelinePlan, stream: &StreamInfo, volume: f32, bluetooth: Option<BluetoothInfo>, underruns: u64) -> SignalPath {
+pub fn build_signal_path(src: &SourceInfo, plan: &PipelinePlan, stream: &StreamInfo, volume: f32, bluetooth: Option<BluetoothInfo>, underruns: u64, dsp: Vec<Stage>) -> SignalPath {
     let mut stages = Vec::new();
     if let Some(rate) = src.dsd_rate {
         let detail = match plan.passthrough {
@@ -26,6 +26,7 @@ pub fn build_signal_path(src: &SourceInfo, plan: &PipelinePlan, stream: &StreamI
         active: plan.resample_from.is_some(),
         detail: plan.resample_from.map_or("rate matched".into(), |from| format!("{} → {} kHz (sinc)", khz(from), khz(plan.format.sample_rate))),
     });
+    stages.extend(dsp);
     let processed = plan.passthrough == Passthrough::None;
     stages.push(Stage {
         kind: StageKind::Volume,
@@ -56,6 +57,13 @@ pub fn build_signal_path(src: &SourceInfo, plan: &PipelinePlan, stream: &StreamI
     }
 }
 
+/// The EQ stage (spec §3.8). `dsp_allowed` is false in bit-perfect mode, which disables all DSP.
+pub fn eq_stage(eq: &EqSettings, dsp_allowed: bool) -> Stage {
+    let flat = eq.bands.iter().all(|b| *b == 0.0) && eq.preamp == 0.0;
+    let detail = if !dsp_allowed { "bypassed (bit-perfect)".into() } else if !eq.enabled { "off".into() } else { eq.preset.clone().unwrap_or_else(|| "Custom".into()) };
+    Stage { kind: StageKind::Eq, active: dsp_allowed && eq.enabled && !flat, detail }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -77,7 +85,7 @@ mod tests {
 
     #[test]
     fn wired_exclusive_bit_perfect_is_device_scope() {
-        let sp = build_signal_path(&src(), &plan(true, true, None), &stream(Transport::Usb, ShareMode::Exclusive), 0.5, None, 0);
+        let sp = build_signal_path(&src(), &plan(true, true, None), &stream(Transport::Usb, ShareMode::Exclusive), 0.5, None, 0, vec![]);
         assert!(sp.bit_perfect);
         assert_eq!(sp.bit_perfect_scope, Some(BitPerfectScope::Device));
         assert!(sp.bluetooth.is_none());
@@ -90,7 +98,7 @@ mod tests {
 
     #[test]
     fn bluetooth_is_os_scope_and_always_has_bluetooth_block() {
-        let sp = build_signal_path(&src(), &plan(true, true, None), &stream(Transport::Bluetooth, ShareMode::Exclusive), 1.0, None, 3);
+        let sp = build_signal_path(&src(), &plan(true, true, None), &stream(Transport::Bluetooth, ShareMode::Exclusive), 1.0, None, 3, vec![]);
         assert_eq!(sp.bit_perfect_scope, Some(BitPerfectScope::Os));
         assert_eq!(sp.bluetooth, Some(BluetoothInfo::default()));
         assert_eq!(sp.underruns, 3);
@@ -98,7 +106,7 @@ mod tests {
 
     #[test]
     fn processed_shows_resampler_and_volume() {
-        let sp = build_signal_path(&src(), &plan(false, false, Some(44_100)), &stream(Transport::Builtin, ShareMode::Shared), 0.82, None, 0);
+        let sp = build_signal_path(&src(), &plan(false, false, Some(44_100)), &stream(Transport::Builtin, ShareMode::Shared), 0.82, None, 0, vec![]);
         assert!(!sp.bit_perfect && sp.bit_perfect_scope.is_none());
         let rs = sp.stages.iter().find(|s| s.kind == StageKind::Resampler).unwrap();
         assert!(rs.active);

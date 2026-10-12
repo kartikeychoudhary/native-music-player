@@ -4,6 +4,7 @@ use std::sync::Arc;
 use rtrb::{Consumer, Producer, RingBuffer};
 
 use super::format::{DeviceSample, OutputFormat};
+use crate::dsp::eq::{EqDesign, EqShared, EqState};
 
 /// Length of the fade applied when playback is interrupted (skip, seek, pause, stop).
 pub const FADE_MS: u64 = 10;
@@ -16,6 +17,8 @@ pub struct StreamShared {
     pub draining: AtomicBool,
     pub device_lost: AtomicBool,
     pub apply_gain: AtomicBool,
+    /// The player sets this for streams opened in processed mode; without it the EQ never runs.
+    pub apply_eq: AtomicBool,
     /// Set by the player before it interrupts audible audio: the callback ramps the output down
     /// over `FADE_MS`, then writes silence without consuming. Clearing it ramps audio back in.
     pub fade_out: AtomicBool,
@@ -40,6 +43,14 @@ pub struct RingSource {
     max_request: usize,
     silent_frames: usize,
     was_fading: bool,
+    /// EQ settings published by the player, the design built from them for this stream's rate,
+    /// and the filter memory. `eq_seq` is the seqlock sequence the design was built from.
+    eq: Option<Arc<EqShared>>,
+    eq_design: EqDesign,
+    eq_state: EqState,
+    eq_seq: u64,
+    eq_on: bool,
+    rate: u32,
 }
 
 pub fn ring_pair(capacity_frames: usize, format: OutputFormat) -> (Producer<u8>, RingSource, Arc<StreamShared>) {
@@ -48,17 +59,34 @@ pub fn ring_pair(capacity_frames: usize, format: OutputFormat) -> (Producer<u8>,
     let shared = Arc::new(StreamShared {
         consumed_frames: AtomicU64::new(0), discard_to: AtomicU64::new(0), underruns: AtomicU64::new(0),
         playing: AtomicBool::new(false), draining: AtomicBool::new(false), device_lost: AtomicBool::new(false),
-        apply_gain: AtomicBool::new(false), fade_out: AtomicBool::new(false), faded: AtomicBool::new(false), fills: AtomicU64::new(0),
+        apply_gain: AtomicBool::new(false), apply_eq: AtomicBool::new(false), fade_out: AtomicBool::new(false), faded: AtomicBool::new(false), fills: AtomicU64::new(0),
         gain_bits: AtomicU32::new(1.0f32.to_bits()),
     });
     let step = 1.0 / (format.sample_rate as u64 * FADE_MS / 1000).max(1) as f32;
-    let source = RingSource { cons, shared: shared.clone(), bpf, sample: format.sample, consumed: 0, level: 1.0, step, max_request: 0, silent_frames: 0, was_fading: false };
+    let source = RingSource { cons, shared: shared.clone(), bpf, sample: format.sample, consumed: 0, level: 1.0, step, max_request: 0, silent_frames: 0, was_fading: false,
+        eq: None, eq_design: EqDesign::new(format.sample_rate, &[0.0; 10], 0.0), eq_state: EqState::new(format.channels as usize),
+        eq_seq: u64::MAX, eq_on: false, rate: format.sample_rate,
+    };
     (prod, source, shared)
 }
 
 impl RingSource {
     pub fn shared(&self) -> &Arc<StreamShared> { &self.shared }
     pub fn bytes_per_frame(&self) -> usize { self.bpf }
+
+    pub fn attach_eq(&mut self, eq: Arc<EqShared>) { self.eq = Some(eq); self.eq_seq = u64::MAX; }
+
+    /// Applies the current EQ to `buf`. A changed setting is picked up here: the design is rebuilt
+    /// for this stream's rate (no allocation) and the filter memory is kept, so changes are smooth.
+    fn eq_step(&mut self, buf: &mut [u8]) {
+        let Some(eq) = &self.eq else { return };
+        if eq.seq() != self.eq_seq && let Some(s) = eq.read() {
+            self.eq_seq = s.seq;
+            self.eq_on = s.enabled;
+            self.eq_design = EqDesign::new(self.rate, &s.bands, s.preamp);
+        }
+        if self.eq_on { self.eq_state.process(&self.eq_design, buf, self.sample); }
+    }
 
     /// Realtime-safe (no allocation, no locks). Returns the number of bytes taken from the ring.
     pub fn fill(&mut self, out: &mut [u8]) -> usize {
@@ -93,6 +121,7 @@ impl RingSource {
                     out[a.len()..n].copy_from_slice(b);
                     chunk.commit_all();
                     self.consumed += frames as u64;
+                    if self.shared.apply_eq.load(Relaxed) { self.eq_step(&mut out[..n]); }
                     if self.shared.apply_gain.load(Relaxed) { apply_gain(&mut out[..n], self.sample, self.shared.gain()); }
                     if fading || self.level < 1.0 { self.ramp(&mut out[..n], fading); }
                 } else {
@@ -287,5 +316,25 @@ mod tests {
         sh.fade_out.store(true, Release);
         for _ in 0..3 { s.fill(&mut [0u8; 64]); }
         assert!(sh.faded.load(Acquire));
+    }
+
+    #[test]
+    fn eq_runs_only_when_the_stream_allows_it_and_it_is_enabled() {
+        use crate::dsp::eq::EqShared;
+        let eq = Arc::new(EqShared::new());
+        let (mut p, mut s, sh) = ring_pair(8192, fmt());
+        s.attach_eq(eq.clone());
+        sh.playing.store(true, Relaxed);
+        loud(&mut p, 1000);
+        let mut out = vec![0u8; 64 * 4];
+        eq.publish(true, &[0.0; 10], -12.0);
+        s.fill(&mut out);
+        assert!(i16s(&out).iter().all(|&v| v == 10_000), "apply_eq is off: untouched");
+        sh.apply_eq.store(true, Relaxed);
+        s.fill(&mut out);
+        assert!(i16s(&out).iter().all(|&v| v == 2_512), "-12 dB preamp: {:?}", &i16s(&out)[..2]);
+        eq.publish(false, &[0.0; 10], -12.0);
+        s.fill(&mut out);
+        assert!(i16s(&out).iter().all(|&v| v == 10_000), "disabled again");
     }
 }

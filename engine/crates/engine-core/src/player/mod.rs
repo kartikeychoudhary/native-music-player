@@ -14,6 +14,7 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use protocol::*;
 
 use crate::decode::{self, DecodeError, TrackDecoder};
+use crate::dsp::eq::EqShared;
 use crate::dsp::resample::StreamResampler;
 use crate::dsp::volume::volume_gain;
 use crate::output::format::OutputFormat;
@@ -22,7 +23,7 @@ use crate::output::{DeviceCaps, OutputBackend, OutputError, OutputStream, Stream
 use chain::ProcessChain;
 use pipeline::{plan_output, Passthrough, PipelinePlan, PlanInput, EXCLUSIVE_UNAVAILABLE};
 pub use queue::{Entry, NewEntry, Queue};
-use signal_path::build_signal_path;
+use signal_path::{build_signal_path, eq_stage};
 
 const MIN_FREE_BYTES: usize = 16 * 1024;
 /// "Played" after half the track or this much listening, whichever comes first.
@@ -45,6 +46,7 @@ pub enum Command {
     Restore(Box<Restore>),
     Play(Option<u32>), Pause, Toggle, Stop, Next, Prev,
     Seek(u64), SetVolume(f32), SetMode(OutputMode), SetDevice(Option<String>), Shutdown,
+    SetEq(EqSettings),
 }
 
 /// A saved session (spec §5.2). The player restores it paused; the first Play opens the stream.
@@ -163,6 +165,9 @@ struct Player {
     status: PlaybackStatus,
     volume: f32,
     mode: OutputMode,
+    /// Published to every stream's callback; only the player thread writes it (single writer).
+    eq: Arc<EqShared>,
+    eq_settings: EqSettings,
     device: Option<String>,
     active: Option<Active>,
     feeding: Option<Feeding>,
@@ -208,7 +213,7 @@ impl Player {
         let devices = backend.devices().unwrap_or_default();
         Self {
             backend, events, shared_state, queue: Queue::new(seed), cur: 0, status: PlaybackStatus::Stopped,
-            volume: 1.0, mode: OutputMode::Processed, device: None, active: None, feeding: None, prepared: None,
+            volume: 1.0, mode: OutputMode::Processed, eq: Arc::new(EqShared::new()), eq_settings: EqSettings::default(), device: None, active: None, feeding: None, prepared: None,
             prepare_failed: None, markers: VecDeque::new(), reopen: None, pending_start: false, exclusive_denied: None, last_excl_caps: None, end_pending: false, queue_current: None, shown_idx: None, resume_ms: None,
             last_tick: Instant::now(), last_underruns: (0, Instant::now()), last_devices: (devices, Instant::now()),
             buffer_secs: cfg.buffer_secs, underrun_times: VecDeque::new(), cfg,
@@ -305,6 +310,11 @@ impl Player {
             }
             Command::SetMode(m) => { self.mode = m; self.exclusive_denied = None; self.restart_if_active(); self.publish(true); }
             Command::SetDevice(d) => { self.device = d; self.exclusive_denied = None; self.restart_if_active(); self.publish(true); }
+            Command::SetEq(s) => {
+                self.eq.publish(s.enabled, &s.bands, s.preamp);
+                self.eq_settings = s;
+                self.refresh_dsp_stages();
+            }
             Command::Shutdown => {}
         }
     }
@@ -485,6 +495,26 @@ impl Player {
     /// it means unity gain even when a track falls back to a processed stream.
     fn software_gain(&self) -> bool { self.mode == OutputMode::Processed }
 
+    /// DSP is allowed only in processed mode (spec §3.5: bit-perfect disables ReplayGain, EQ and crossfade).
+    fn dsp_allowed(&self) -> bool { self.mode == OutputMode::Processed }
+
+    /// The DSP stages of the signal path, in chain order.
+    fn dsp_stages(&self, dsp_allowed: bool) -> Vec<Stage> {
+        vec![eq_stage(&self.eq_settings, dsp_allowed)]
+    }
+
+    /// Rebuilds the DSP stages of the audible track's signal path after a setting changed, and sends it.
+    fn refresh_dsp_stages(&mut self) {
+        let allowed = self.dsp_allowed();
+        let fresh = self.dsp_stages(allowed);
+        if let Some(m) = self.markers.front_mut() {
+            m.signal.stages.retain(|s| !matches!(s.kind, StageKind::ReplayGain | StageKind::Eq | StageKind::Crossfade));
+            let at = m.signal.stages.iter().position(|s| s.kind == StageKind::Volume).unwrap_or(m.signal.stages.len());
+            for (i, st) in fresh.into_iter().enumerate() { m.signal.stages.insert(at + i, st); }
+            let _ = self.events.send(PlayerEvent::SignalPath(m.signal.clone()));
+        }
+    }
+
     /// The volume the signal path reports for streams opened now.
     fn effective_volume(&self) -> f32 { if self.software_gain() { self.volume } else { 1.0 } }
 
@@ -539,8 +569,12 @@ impl Player {
 
     fn open_stream(&mut self, plan: &PipelinePlan) -> Result<(), OutputError> {
         let fmt = plan.format;
-        let (prod, src, shared) = ring_pair((fmt.sample_rate as f64 * self.buffer_secs) as usize, fmt);
+        let (prod, mut src, shared) = ring_pair((fmt.sample_rate as f64 * self.buffer_secs) as usize, fmt);
         shared.apply_gain.store(self.software_gain() && plan.passthrough == Passthrough::None, Release);
+        // The EQ filters up to 8 channels; wider streams bypass it.
+        let processed = self.mode == OutputMode::Processed && plan.passthrough == Passthrough::None && fmt.channels <= 8;
+        shared.apply_eq.store(processed, Release);
+        src.attach_eq(self.eq.clone());
         shared.set_gain(volume_gain(self.volume) as f32);
         let mut stream = self.backend.open(self.device.as_deref(), fmt, plan.exclusive, src)?;
         stream.start()?;
@@ -624,9 +658,10 @@ impl Player {
     }
 
     fn begin_feeding(&mut self, idx: usize, dec: Box<dyn TrackDecoder>, plan: PipelinePlan, start_ms: u64, reuse: Option<StreamResampler>) {
+        let dsp = self.dsp_stages(self.dsp_allowed());
         let a = self.active.as_ref().expect("stream open before feeding");
         let info = dec.info().clone();
-        let signal = build_signal_path(&info, &plan, &a.info, self.effective_volume(), a.bluetooth.clone(), a.shared.underruns.load(Relaxed));
+        let signal = build_signal_path(&info, &plan, &a.info, self.effective_volume(), a.bluetooth.clone(), a.shared.underruns.load(Relaxed), dsp);
         self.markers.push_back(Marker {
             start: a.written_frames(), idx, start_ms, out_rate: plan.format.sample_rate, signal,
             duration_ms: info.total_frames.map(|f| f * 1000 / info.spec.sample_rate.max(1) as u64),
