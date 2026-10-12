@@ -32,7 +32,7 @@ pub fn decode_text(bytes: &[u8]) -> String {
 
 /// Lossy UTF-16 decode (unpaired surrogates become U+FFFD; a trailing odd byte is dropped).
 fn decode_utf16(bytes: &[u8], unit: fn([u8; 2]) -> u16) -> String {
-    char::decode_utf16(bytes.chunks_exact(2).map(|c| unit([c[0], c[1]])))
+    char::decode_utf16(bytes.as_chunks::<2>().0.iter().map(|c| unit(*c)))
         .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER))
         .collect()
 }
