@@ -41,6 +41,8 @@ export function fakeApi(overrides: Partial<Record<keyof Methods, Handler>> = {})
     status: vi.fn(async () => ({ state: 'ready' })),
     restartEngine: vi.fn(async () => {}),
     openLogs: vi.fn(async () => {}),
+    setViz: vi.fn(),
+    onSpectrum: vi.fn(() => () => {}),
     platform: 'linux',
   }
   const emit = (e: string, p: unknown) => act(() => { handlers.get(e)?.forEach((cb) => cb(p)) })

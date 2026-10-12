@@ -47,6 +47,7 @@ export class EngineSupervisor extends EventEmitter {
     const client = new EngineClient(child, { protocolVersion: this.opts.protocolVersion })
     this.client = client
     client.on('notification', (m, p) => this.emit('notification', m, p))
+    client.on('frame', (t: number, d: Uint8Array) => this.emit('frame', t, d))
     client.on('log', (l) => this.emit('log', l))
     client.on('exit', () => this.onExit(client))
     client.on('spawnError', (e: Error) => {

@@ -113,4 +113,19 @@ describe('EngineClient', () => {
     await expect(p).rejects.toThrow(/ENOENT/)
     await expect(spawnErr).resolves.toBe(err)
   })
+
+  it('emits binary frames without disturbing JSON handling', async () => {
+    const { child, emit } = fakeChild()
+    const c = new EngineClient(child, { protocolVersion: 1 })
+    const frames: [number, Uint8Array][] = []
+    c.on('frame', (t: number, d: Uint8Array) => frames.push([t, d]))
+    emit(ready())
+    await expect(c.ready()).resolves.toBeTruthy()
+    const f = new Uint8Array(70); f[0] = 0x1e; new DataView(f.buffer).setUint32(1, 65, true); f[5] = 1; f[6] = 200
+    ;(child.stdout as unknown as PassThrough).write(Buffer.from(f))
+    await new Promise((r) => setImmediate(r))
+    expect(frames).toHaveLength(1)
+    expect(frames[0][0]).toBe(1)
+    expect(frames[0][1][0]).toBe(200)
+  })
 })

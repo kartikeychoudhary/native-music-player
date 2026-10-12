@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, net, protocol, screen, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, net, protocol, screen, shell, webContents } from 'electron'
 import { spawn } from 'node:child_process'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -13,6 +13,7 @@ import { logDir, logger } from './logs'
 import { shouldBlockNavigation } from './navigation'
 import { safeSend } from './safeSend'
 import { boundsVisible, SettingsStore } from './settings'
+import { createVizHub } from './viz'
 
 protocol.registerSchemesAsPrivileged([{ scheme: ART_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }])
 
@@ -36,6 +37,12 @@ const binary = () => enginePath({ isPackaged: app.isPackaged, resourcesPath: pro
 const dataDir = () => resolveDataDir({ isPackaged: app.isPackaged, env: process.env, userData: app.getPath('userData') })
 
 const supervisor = new EngineSupervisor(() => spawn(binary(), engineArgs(dataDir()), { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }), { protocolVersion: PROTOCOL_VERSION })
+
+// Spectrum subscriptions are refcounted across windows; the engine only has one on/off switch.
+const viz = createVizHub({
+  call: (method) => supervisor.call(method, {}),
+  send: (id, data) => { const wc = webContents.fromId(id); if (!wc || wc.isDestroyed()) return false; wc.send('aurora:spectrum', data); return true },
+})
 
 // Holds library notices (sent once, right after the engine starts) until the page has loaded.
 const relay = createEventRelay((event, payload) => safeSend(win, 'aurora:event', event, payload))
@@ -90,6 +97,9 @@ app.whenReady().then(() => {
   supervisor.on('notification', (m: string, p: unknown) => send(m, p))
   supervisor.on('status', (s) => { engineLog(`[status] ${JSON.stringify(s)}`); send('engine.status', s) })
 
+  supervisor.on('frame', (t: number, d: Uint8Array) => viz.frame(t, d))
+  supervisor.on('status', (s) => { if (s.state === 'ready') viz.engineReady() })
+
   protocol.handle(ART_SCHEME, createArtHandler(
     (method, params) => supervisor.call(method, params) as never,
     (path) => net.fetch(pathToFileURL(path).toString()),
@@ -135,6 +145,11 @@ app.whenReady().then(() => {
   ipcMain.handle('aurora:setSettings', (_e, patch: unknown) => settings.update(patch))
   ipcMain.handle('aurora:status', () => supervisor.status)
   ipcMain.handle('aurora:restartEngine', () => supervisor.restart())
+  ipcMain.on('aurora:viz', (e, on: unknown) => {
+    const id = e.sender.id
+    viz.set(id, on === true)
+    e.sender.once('destroyed', () => viz.drop(id))
+  })
   ipcMain.handle('aurora:openLogs', async () => { await shell.openPath(logDir()) })
 
   supervisor.start()

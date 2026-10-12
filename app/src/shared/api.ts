@@ -135,6 +135,9 @@ export function isAllowedMethod(m: unknown): m is keyof Methods {
 
 export const AUDIO_EXTENSIONS = ['mp3', 'm4a', 'm4b', 'mp4', 'aac', 'flac', 'wav', 'aif', 'aiff', 'aifc', 'ogg', 'oga', 'opus', 'dsf', 'dff'] as const
 
+/** Binary frame kinds from the engine (spec §4.1). */
+export const FRAME_SPECTRUM = 1
+
 export interface AuroraApi {
   call<K extends keyof Methods>(method: K, params: Methods[K]['params']): Promise<Methods[K]['result']>
   on<E extends keyof Events>(event: E, cb: (payload: Events[E]) => void): () => void
@@ -149,5 +152,9 @@ export interface AuroraApi {
   status(): Promise<EngineStatus>
   restartEngine(): Promise<void>
   openLogs(): Promise<void>
+  /** Turns this window's spectrum subscription on or off (main refcounts across windows). */
+  setViz(on: boolean): void
+  /** 64 spectrum bins (0-255) at up to 30 fps while subscribed. */
+  onSpectrum(cb: (bins: Uint8Array) => void): () => void
   platform: string
 }

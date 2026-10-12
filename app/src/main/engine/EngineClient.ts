@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events'
 import type { EngineReady } from '@protocol/EngineReady'
 import { LineDecoder } from './lineCodec'
+import { StreamDecoder } from './streamCodec'
 
 export interface ChildLike {
   stdin: NodeJS.WritableStream
@@ -29,11 +30,16 @@ export class EngineClient extends EventEmitter {
     super()
     this.readyPromise = new Promise((resolve, reject) => { this.settleReady = { resolve, reject } })
     this.readyPromise.catch(() => {}) // observed via ready()
-    const out = new LineDecoder()
+    const out = new StreamDecoder()
     const err = new LineDecoder()
-    child.stdout.setEncoding?.('utf8')
     child.stderr.setEncoding?.('utf8')
-    child.stdout.on('data', (c: string | Buffer) => out.push(c.toString()).forEach((l) => this.onLine(l)))
+    child.stdout.on('data', (c: string | Buffer) => {
+      const bytes = typeof c === 'string' ? Buffer.from(c, 'utf8') : c
+      for (const chunk of out.push(bytes)) {
+        if (chunk.kind === 'line') this.onLine(chunk.text)
+        else this.emit('frame', chunk.type, chunk.data)
+      }
+    })
     child.stderr.on('data', (c: string | Buffer) => err.push(c.toString()).forEach((l) => this.emit('log', l)))
     child.on('exit', (code) => {
       this.exited = true
