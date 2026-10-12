@@ -1,5 +1,6 @@
 import { FolderPlus, RefreshCw, Trash2 } from 'lucide-react'
 import { useState } from 'react'
+import { AboutSection } from '../components/AboutSection'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { DevicePicker } from '../components/DevicePicker'
 import { EqPanel } from '../components/EqPanel'
@@ -107,10 +108,7 @@ export function SettingsView() {
         </dl>
       </section>
 
-      <section className={v.section}>
-        <h2 className={v.sectionTitle}>{S.about}</h2>
-        <p className="muted" style={{ margin: 0, userSelect: 'text' }}>{S.licences}</p>
-      </section>
+      <AboutSection />
 
       {removing && (
         <ConfirmDialog title={S.removeFolderTitle} body={S.removeFolderBody(removing.path)} confirm={S.remove}

@@ -19,6 +19,8 @@ const api: AuroraApi = {
   status: () => ipcRenderer.invoke('aurora:status'),
   restartEngine: () => ipcRenderer.invoke('aurora:restartEngine'),
   openLogs: () => ipcRenderer.invoke('aurora:openLogs'),
+  appInfo: () => ipcRenderer.invoke('aurora:appInfo'),
+  openLicenses: () => ipcRenderer.invoke('aurora:openLicenses'),
   toggleMini: () => ipcRenderer.invoke('aurora:toggleMini'),
   showMain: () => ipcRenderer.invoke('aurora:showMain'),
   setViz: (on) => ipcRenderer.send('aurora:viz', on === true),

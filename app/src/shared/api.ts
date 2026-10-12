@@ -53,9 +53,12 @@ import type { TrackDetail } from '@protocol/TrackDetail'
 import type { TrackIdsParams } from '@protocol/TrackIdsParams'
 import type { TrackRow } from '@protocol/TrackRow'
 import type { VolumeParams } from '@protocol/VolumeParams'
+import type { EngineReady } from '@protocol/EngineReady'
 import type { Settings } from './settings'
 
-export type EngineStatus = { state: 'starting' | 'ready' | 'restarting' | 'failed' | 'mismatch'; message?: string }
+export type EngineStatus = { state: 'starting' | 'ready' | 'restarting' | 'failed' | 'mismatch'; message?: string; engine?: EngineReady }
+
+export interface AppInfo { version: string; variant: 'standard' | 'nofdk'; platform: string; arch: string; licenses: boolean }
 type None = Record<string, never>
 type M<P, R> = { params: P; result: R }
 
@@ -172,6 +175,8 @@ export interface AuroraApi {
   status(): Promise<EngineStatus>
   restartEngine(): Promise<void>
   openLogs(): Promise<void>
+  appInfo(): Promise<AppInfo>
+  openLicenses(): Promise<void>
   toggleMini(): Promise<void>
   showMain(): Promise<void>
   /** Turns this window's spectrum subscription on or off (main refcounts across windows). */

@@ -46,6 +46,15 @@ describe('EngineSupervisor', () => {
     expect(s.children).toHaveLength(3)
   })
 
+  it('carries the engine.ready info on the ready status', async () => {
+    const s = spawner()
+    const sup = new EngineSupervisor(s.spawn, { protocolVersion: 3 })
+    sup.start()
+    s.children[0].stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'engine.ready', params: { version: '0.1.0', protocolVersion: 3, features: ['opus', 'fdk-aac'] } }) + '\n')
+    await new Promise((r) => setImmediate(r))
+    expect(sup.status).toEqual({ state: 'ready', engine: { version: '0.1.0', protocolVersion: 3, features: ['opus', 'fdk-aac'] } })
+  })
+
   it('does not restart on protocol mismatch', async () => {
     const s = spawner()
     const sup = new EngineSupervisor(s.spawn, { protocolVersion: 1, schedule: () => { throw new Error('must not schedule') } })

@@ -57,7 +57,7 @@ export class EngineSupervisor extends EventEmitter {
       client.dispose()
     })
     client.ready().then(
-      () => { if (this.client === client) { this.isReady = true; this.setStatus({ state: 'ready' }) } },
+      (engine) => { if (this.client === client) { this.isReady = true; this.setStatus({ state: 'ready', engine }) } },
       (e) => {
         if (e?.code === 'PROTOCOL_MISMATCH' && this.client === client) {
           this.stopping = true

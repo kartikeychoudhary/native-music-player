@@ -1,10 +1,12 @@
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell, webContents } from 'electron'
 import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { PROTOCOL_VERSION } from '@protocol/ProtocolVersion'
 import { AUDIO_EXTENSIONS, isAllowedMethod } from '@shared/api'
 import { ART_SCHEME, createArtHandler } from './artProtocol'
+import { readBuildInfo } from './buildInfo'
 import { engineArgs, resolveDataDir, usesSingleInstanceLock } from './engineArgs'
 import { enginePath } from './engine/enginePath'
 import { EngineSupervisor } from './engine/supervisor'
@@ -138,6 +140,10 @@ app.whenReady().then(() => {
   ipcMain.handle('aurora:toggleMini', () => { windows.toggleMini(); syncWindows() })
   ipcMain.handle('aurora:showMain', () => { windows.showMain(); syncWindows() })
   ipcMain.handle('aurora:openLogs', async () => { await shell.openPath(logDir()) })
+  const build = readBuildInfo({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath })
+  const licensesPath = () => (app.isPackaged ? join(process.resourcesPath, 'THIRD_PARTY_LICENSES.txt') : join(app.getAppPath(), 'build/generated/THIRD_PARTY_LICENSES.txt'))
+  ipcMain.handle('aurora:appInfo', () => ({ version: app.getVersion(), variant: build.variant, platform: process.platform, arch: process.arch, licenses: existsSync(licensesPath()) }))
+  ipcMain.handle('aurora:openLicenses', async () => { if (existsSync(licensesPath())) await shell.openPath(licensesPath()) })
 
   supervisor.start()
   windows.createMain()

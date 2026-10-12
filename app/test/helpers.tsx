@@ -51,6 +51,8 @@ export function fakeApi(overrides: Partial<Record<keyof Methods, Handler>> = {})
     status: vi.fn(async () => ({ state: 'ready' })),
     restartEngine: vi.fn(async () => {}),
     openLogs: vi.fn(async () => {}),
+    appInfo: vi.fn(async () => ({ version: '0.0.0', variant: 'standard', platform: 'linux', arch: 'x64', licenses: false })),
+    openLicenses: vi.fn(async () => {}),
     toggleMini: vi.fn().mockResolvedValue(undefined),
     showMain: vi.fn().mockResolvedValue(undefined),
     setViz: vi.fn(),

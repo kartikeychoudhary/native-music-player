@@ -48,3 +48,35 @@ describe('settings', () => {
     expect(within(screen.getByRole('navigation', { name: 'Main' })).queryByRole('status')).toBeNull()
   })
 })
+
+describe('About', () => {
+  const info = (extra: Record<string, unknown> = {}) => ({ version: '0.1.0', variant: 'standard', platform: 'win32', arch: 'x64', licenses: true, ...extra })
+
+  it('shows the app and engine versions and whether HE-AAC is in this build', async () => {
+    const { api } = fakeApi()
+    api.appInfo.mockResolvedValue(info() as never)
+    api.status.mockResolvedValue({ state: 'ready', engine: { version: '0.1.0', protocolVersion: 3, features: ['opus', 'fdk-aac'] } } as never)
+    await renderAt('/settings', api)
+    expect(await screen.findByText('Aurora 0.1.0')).toBeTruthy()
+    expect(screen.getByText('Engine 0.1.0')).toBeTruthy()
+    expect(screen.getByText('Included (Fraunhofer FDK AAC)')).toBeTruthy()
+    expect(screen.getByText('win32-x64')).toBeTruthy()
+  })
+  it('says when HE-AAC is not in this build and labels the no-fdk variant', async () => {
+    const { api } = fakeApi()
+    api.appInfo.mockResolvedValue(info({ variant: 'nofdk', platform: 'linux', arch: 'arm64', licenses: false }) as never)
+    api.status.mockResolvedValue({ state: 'ready', engine: { version: '0.1.0', protocolVersion: 3, features: ['opus'] } } as never)
+    await renderAt('/settings', api)
+    expect(await screen.findByText('Not in this build')).toBeTruthy()
+    expect(await screen.findByText('linux-arm64 · without fdk-aac')).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Third-party licenses' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+  it('opens the license file', async () => {
+    const { api } = fakeApi()
+    api.appInfo.mockResolvedValue(info({ platform: 'darwin', arch: 'arm64' }) as never)
+    await renderAt('/settings', api)
+    await screen.findByText('Aurora 0.1.0')
+    fireEvent.click(screen.getByRole('button', { name: 'Third-party licenses' }))
+    expect(api.openLicenses).toHaveBeenCalled()
+  })
+})
