@@ -12,7 +12,8 @@ pub struct ProcessChain {
     dither: Ditherer,
     f: Vec<f64>,
     mapped: Vec<f64>,
-    resampled: Vec<f64>,
+    /// Scratch for `process`/`flush`, so they don't allocate per block.
+    rendered: Vec<f64>,
     gain: f64,
 }
 
@@ -25,7 +26,7 @@ impl ProcessChain {
                 _ => StreamResampler::new(want.0, want.1, want.2).expect("resampler config from plan_output must be valid"),
             }
         });
-        Self { plan, src, resampler, dither: Ditherer::new(0x5EED), f: vec![], mapped: vec![], resampled: vec![], gain: 1.0 }
+        Self { plan, src, resampler, dither: Ditherer::new(0x5EED), f: vec![], mapped: vec![], rendered: vec![], gain: 1.0 }
     }
 
     pub fn plan(&self) -> &PipelinePlan { &self.plan }
@@ -34,6 +35,33 @@ impl ProcessChain {
     /// Linear gain (ReplayGain) applied to processed samples after resampling; passthrough ignores it.
     pub fn set_gain(&mut self, linear: f64) { self.gain = linear; }
 
+    /// Processed samples for `block` at the output rate (channel-mapped, resampled, gained), appended to `out`.
+    pub fn render(&mut self, block: &PcmBlock, out: &mut Vec<f64>) {
+        self.f.clear();
+        block.to_f64(&mut self.f);
+        self.mapped.clear();
+        self.plan.channel_map.apply(&self.f, &mut self.mapped);
+        let start = out.len();
+        match self.resampler.as_mut() {
+            Some(r) => r.process(&self.mapped, out),
+            None => out.extend_from_slice(&self.mapped),
+        }
+        if self.gain != 1.0 { for s in &mut out[start..] { *s *= self.gain; } }
+    }
+
+    /// The resampler's buffered tail (with gain), appended to `out`.
+    pub fn render_flush(&mut self, out: &mut Vec<f64>) {
+        let start = out.len();
+        if let Some(r) = self.resampler.as_mut() { r.flush(out); }
+        if self.gain != 1.0 { for s in &mut out[start..] { *s *= self.gain; } }
+    }
+
+    /// Device bytes for processed samples, with this chain's dither.
+    pub fn encode(&mut self, samples: &[f64], out: &mut Vec<u8>) {
+        let dither = self.plan.dither.then_some(&mut self.dither);
+        write_f64(samples, self.plan.format.sample, dither, out);
+    }
+
     pub fn process(&mut self, block: &PcmBlock, out: &mut Vec<u8>) {
         debug_assert_eq!(block.spec.channels, self.src.channels);
         match (self.plan.passthrough, &block.data) {
@@ -41,27 +69,19 @@ impl ProcessChain {
             (Passthrough::Float, PcmData::Float(v)) => return write_f32_passthrough(v, out),
             _ => {}
         }
-        self.f.clear();
-        block.to_f64(&mut self.f);
-        self.mapped.clear();
-        self.plan.channel_map.apply(&self.f, &mut self.mapped);
-        let samples: &mut Vec<f64> = match self.resampler.as_mut() {
-            Some(r) => { self.resampled.clear(); r.process(&self.mapped, &mut self.resampled); &mut self.resampled }
-            None => &mut self.mapped,
-        };
-        if self.gain != 1.0 { for s in samples.iter_mut() { *s *= self.gain; } }
-        let dither = self.plan.dither.then_some(&mut self.dither);
-        write_f64(samples, self.plan.format.sample, dither, out);
+        let mut r = std::mem::take(&mut self.rendered);
+        r.clear();
+        self.render(block, &mut r);
+        self.encode(&r, out);
+        self.rendered = r;
     }
 
     pub fn flush(&mut self, out: &mut Vec<u8>) {
-        if let Some(r) = self.resampler.as_mut() {
-            self.resampled.clear();
-            r.flush(&mut self.resampled);
-            if self.gain != 1.0 { for s in self.resampled.iter_mut() { *s *= self.gain; } }
-            let dither = self.plan.dither.then_some(&mut self.dither);
-            write_f64(&self.resampled, self.plan.format.sample, dither, out);
-        }
+        let mut r = std::mem::take(&mut self.rendered);
+        r.clear();
+        self.render_flush(&mut r);
+        if !r.is_empty() { self.encode(&r, out); }
+        self.rendered = r;
     }
 }
 

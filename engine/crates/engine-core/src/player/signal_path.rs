@@ -80,6 +80,12 @@ pub fn eq_stage(eq: &EqSettings, dsp_allowed: bool) -> Stage {
     Stage { kind: StageKind::Eq, active: dsp_allowed && eq.enabled && !flat, detail }
 }
 
+/// The crossfade stage (spec §3.6). `dsp_allowed` is false in bit-perfect mode, which disables all DSP.
+pub fn crossfade_stage(secs: f32, dsp_allowed: bool) -> Stage {
+    let detail = if !dsp_allowed { "bypassed (bit-perfect)".into() } else if secs <= 0.0 { "off".into() } else if secs.fract() == 0.0 { format!("{secs:.0} s") } else { format!("{secs:.1} s") };
+    Stage { kind: StageKind::Crossfade, active: dsp_allowed && secs > 0.0, detail }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

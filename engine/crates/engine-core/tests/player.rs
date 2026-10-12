@@ -539,3 +539,105 @@ fn bit_perfect_ignores_replay_gain() {
     let expected: Vec<u8> = read_s32le("pcm24_96k.s32le").iter().flat_map(|s| (s >> 8).to_le_bytes()[..3].to_vec()).collect();
     assert_eq!(h.recorded(), expected);
 }
+
+const GAP_A: usize = 110_583;
+const GAP_B: usize = 6 * 44_100 - GAP_A;
+const SHORT: usize = 22_050;
+
+fn album_entry(name: &str, album: Option<i64>, track: Option<u32>) -> engine_core::player::NewEntry {
+    engine_core::player::NewEntry { album_id: album, disc_no: Some(1), track_no: track, ..engine_core::player::NewEntry::from_path(fixture(name)) }
+}
+
+fn play_entries(p: &PlayerHandle, items: Vec<engine_core::player::NewEntry>) {
+    p.send(Command::SetQueue { items, start: 0 });
+    p.send(Command::Play(None));
+}
+
+#[test]
+fn crossfade_overlaps_consecutive_tracks() {
+    let (p, h, rx) = setup(OutputMode::Processed);
+    p.send(Command::SetCrossfade(1.0));
+    play_entries(&p, vec![album_entry("gap_a.flac", None, None), album_entry("gap_b.flac", None, None)]);
+    let events = run_to_end(&h, &rx);
+    assert_eq!(h.recorded().len() / 8, GAP_A + GAP_B - 44_100, "one second of overlap");
+    assert_eq!(h.opened().len(), 1, "same stream throughout");
+    let st = events.iter().filter_map(|e| if let PlayerEvent::SignalPath(s) = e { s.stages.iter().find(|s| s.kind == StageKind::Crossfade).cloned() } else { None }).next_back().unwrap();
+    assert_eq!((st.active, st.detail.as_str()), (true, "1 s"));
+}
+
+#[test]
+fn smart_skip_keeps_an_album_played_in_order_gapless() {
+    let (p, h, rx) = setup(OutputMode::Processed);
+    p.send(Command::SetCrossfade(1.0));
+    play_entries(&p, vec![album_entry("gap_a.flac", Some(7), Some(1)), album_entry("gap_b.flac", Some(7), Some(2))]);
+    run_to_end(&h, &rx);
+    assert_eq!(f32s(&h.recorded()), read_f32le("gap_src.f32le"), "sample-exact gapless join");
+}
+
+#[test]
+fn crossfade_shrinks_for_short_tracks() {
+    let (p, h, rx) = setup(OutputMode::Processed);
+    p.send(Command::SetCrossfade(4.0));
+    play_entries(&p, vec![album_entry("short_a.flac", None, None), album_entry("short_b.flac", None, None)]);
+    run_to_end(&h, &rx);
+    assert_eq!(h.recorded().len() / 8, 2 * SHORT - SHORT / 2, "overlap = half the shorter track");
+}
+
+#[test]
+fn repeat_one_replays_are_not_crossfaded() {
+    let (p, h, _rx) = setup(OutputMode::Processed);
+    p.send(Command::SetCrossfade(1.0));
+    p.send(Command::SetRepeat(RepeatMode::One));
+    play_entries(&p, vec![album_entry("gap_a.flac", None, None)]);
+    pull_frames(&h, 2 * GAP_A);
+    let src = read_f32le("gap_src.f32le");
+    let once = &src[..GAP_A * 2];
+    let got = f32s(&h.recorded());
+    assert_eq!(&got[..GAP_A * 2], once);
+    assert_eq!(&got[GAP_A * 2..GAP_A * 4], once, "second play starts cleanly");
+}
+
+#[test]
+fn bit_perfect_never_crossfades() {
+    let (p, h, rx) = setup(OutputMode::BitPerfect);
+    p.send(Command::SetCrossfade(1.0));
+    play_entries(&p, vec![album_entry("gap_a.flac", None, None), album_entry("gap_b.flac", None, None)]);
+    run_to_end(&h, &rx);
+    let bpf = h.opened()[0].0.bytes_per_frame();
+    assert_eq!(h.recorded().len() / bpf, GAP_A + GAP_B);
+}
+
+#[test]
+fn seek_during_crossfade_plays_one_track() {
+    let (p, h, rx) = setup(OutputMode::Processed);
+    p.send(Command::SetCrossfade(1.0));
+    play_entries(&p, vec![album_entry("gap_a.flac", None, None), album_entry("gap_b.flac", None, None)]);
+    // Into the overlap: gap_b becomes current where the mix starts.
+    let start = Instant::now();
+    while p.state().queue_index != Some(1) { assert!(start.elapsed() < Duration::from_secs(10)); pull_frames(&h, 512); }
+    p.send(Command::Seek(500));
+    wait_for(&p, |s| s.queue_index == Some(1) && s.position_ms == 500);
+    h.clear_recorded();
+    run_to_end(&h, &rx);
+    assert_eq!(f32s(&h.recorded()), read_f32le("gap_src.f32le")[(GAP_A + 22_050) * 2..], "only gap_b, from 0.5 s, unmixed");
+}
+
+#[test]
+fn removing_the_incoming_track_during_crossfade_resyncs() {
+    let (p, h, rx) = setup(OutputMode::Processed);
+    p.send(Command::SetCrossfade(1.0));
+    play_entries(&p, vec![album_entry("gap_a.flac", None, None), album_entry("gap_b.flac", None, None), album_entry("short_a.flac", None, None)]);
+    pull_frames(&h, 4_410);
+    std::thread::sleep(Duration::from_millis(300)); // the decoder is already into gap_a's tail (it is 2.5 s, the ring holds 2 s)
+    let gap_b = p.state().queue_item_id.unwrap() + 1;
+    p.send(Command::Remove(vec![gap_b]));
+    // Pull only once the edit (and its same-position resync) is applied: a pull racing the resync
+    // could read stale frames after the resync took its position, and they would be heard twice.
+    let start = Instant::now();
+    while !rx.try_iter().any(|e| matches!(e, PlayerEvent::Queue(q) if q.items.len() == 2)) {
+        assert!(start.elapsed() < Duration::from_secs(10), "edit not applied");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    run_to_end(&h, &rx);
+    assert_eq!(h.recorded().len() / 8, GAP_A + SHORT - SHORT / 2, "gap_a crossfades into short_a (overlap 0.25 s); no gap_b audio");
+}

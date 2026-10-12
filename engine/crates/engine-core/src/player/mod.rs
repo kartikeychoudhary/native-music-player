@@ -13,7 +13,8 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use protocol::*;
 
-use crate::decode::{self, DecodeError, TrackDecoder};
+use crate::decode::{self, DecodeError, SourceInfo, TrackDecoder};
+use crate::dsp::crossfade::{equal_power, overlap_secs, same_album_in_order, AlbumPos};
 use crate::dsp::eq::EqShared;
 use crate::dsp::replaygain::{decide, RgDecision};
 use crate::dsp::resample::StreamResampler;
@@ -24,9 +25,11 @@ use crate::output::{DeviceCaps, OutputBackend, OutputError, OutputStream, Stream
 use chain::ProcessChain;
 use pipeline::{plan_output, Passthrough, PipelinePlan, PlanInput, EXCLUSIVE_UNAVAILABLE};
 pub use queue::{Entry, NewEntry, Queue};
-use signal_path::{build_signal_path, eq_stage, rg_stage};
+use signal_path::{build_signal_path, crossfade_stage, eq_stage, rg_stage};
 
 const MIN_FREE_BYTES: usize = 16 * 1024;
+/// A crossfade starts this long before its overlap would, so the outgoing tail can be decoded first.
+const XFADE_LEAD_SECS: f64 = 1.0;
 /// "Played" after half the track or this much listening, whichever comes first.
 pub const PLAYED_MAX_MS: u64 = 240_000;
 
@@ -49,6 +52,8 @@ pub enum Command {
     Seek(u64), SetVolume(f32), SetMode(OutputMode), SetDevice(Option<String>), Shutdown,
     SetEq(EqSettings),
     SetReplayGain(ReplayGainMode),
+    /// Crossfade length in seconds, clamped to 0..=12. Affects transitions that haven't started yet.
+    SetCrossfade(f32),
 }
 
 /// A saved session (spec §5.2). The player restores it paused; the first Play opens the stream.
@@ -154,8 +159,24 @@ struct Marker {
 /// `prev` is the format of the stream being replaced (for the gap note).
 struct Reopen { idx: usize, dec: Box<dyn TrackDecoder>, plan: PipelinePlan, prev: Option<OutputFormat> }
 
+/// An automatic transition being crossfaded (see the M3 plan, Task 5). `inc` decodes the incoming
+/// track; `tail` holds the outgoing track's remaining output until its end is known.
+struct Crossfade {
+    inc: Feeding,
+    tail: Vec<f64>,
+    tail_done: bool,
+    /// Overlap wanted, in output frames; `total` is fixed once the tail's length is known.
+    planned: usize,
+    total: usize,
+    /// Tail frames already written (unmixed first, then mixed).
+    pos: usize,
+    mixed: usize,
+    head: Vec<f64>,
+    marker_pushed: bool,
+}
+
 /// Queue positions the player holds, captured by entry id before an edit.
-struct Held { cur: Option<u32>, feeding: Option<u32>, prepared: Option<u32>, prepare_failed: Option<u32>, reopen: Option<u32>, shown: Option<u32>, markers: Vec<Option<u32>> }
+struct Held { cur: Option<u32>, feeding: Option<u32>, prepared: Option<u32>, prepare_failed: Option<u32>, reopen: Option<u32>, xfade: Option<u32>, shown: Option<u32>, markers: Vec<Option<u32>> }
 
 struct Player {
     backend: Arc<dyn OutputBackend>,
@@ -171,6 +192,10 @@ struct Player {
     eq: Arc<EqShared>,
     eq_settings: EqSettings,
     rg_mode: ReplayGainMode,
+    crossfade_secs: f32,
+    xfade: Option<Crossfade>,
+    /// Queue index of an outgoing track whose crossfade was declined (the incoming plan changes format).
+    xfade_declined: Option<usize>,
     device: Option<String>,
     active: Option<Active>,
     feeding: Option<Feeding>,
@@ -216,7 +241,8 @@ impl Player {
         let devices = backend.devices().unwrap_or_default();
         Self {
             backend, events, shared_state, queue: Queue::new(seed), cur: 0, status: PlaybackStatus::Stopped,
-            volume: 1.0, mode: OutputMode::Processed, eq: Arc::new(EqShared::new()), eq_settings: EqSettings::default(), rg_mode: ReplayGainMode::Off, device: None, active: None, feeding: None, prepared: None,
+            volume: 1.0, mode: OutputMode::Processed, eq: Arc::new(EqShared::new()), eq_settings: EqSettings::default(), rg_mode: ReplayGainMode::Off,
+            crossfade_secs: 0.0, xfade: None, xfade_declined: None, device: None, active: None, feeding: None, prepared: None,
             prepare_failed: None, markers: VecDeque::new(), reopen: None, pending_start: false, exclusive_denied: None, last_excl_caps: None, end_pending: false, queue_current: None, shown_idx: None, resume_ms: None,
             last_tick: Instant::now(), last_underruns: (0, Instant::now()), last_devices: (devices, Instant::now()),
             buffer_secs: cfg.buffer_secs, underrun_times: VecDeque::new(), cfg,
@@ -328,6 +354,7 @@ impl Player {
                 }
                 self.refresh_dsp_stages();
             }
+            Command::SetCrossfade(secs) => { self.crossfade_secs = secs.clamp(0.0, 12.0); self.refresh_dsp_stages(); }
             Command::Shutdown => {}
         }
     }
@@ -376,6 +403,7 @@ impl Player {
             prepared: self.prepared.as_ref().and_then(|(i, _)| id(*i)),
             prepare_failed: self.prepare_failed.and_then(id),
             reopen: self.reopen.as_ref().and_then(|r| id(r.idx)),
+            xfade: self.xfade.as_ref().and_then(|x| id(x.inc.idx)),
             shown: self.shown_idx.and_then(id),
             markers: self.markers.iter().map(|m| id(m.idx)).collect(),
         }
@@ -399,6 +427,13 @@ impl Player {
         }
         if let Some(r) = self.reopen.as_mut() {
             match at(h.reopen) { Some(i) => r.idx = i, None => consistent = false }
+        }
+        if let Some(x) = self.xfade.as_mut() {
+            match at(h.xfade) {
+                // The incoming track must still be what follows the outgoing one.
+                Some(i) if self.feeding.as_ref().and_then(|f| q.auto_next(f.idx)) == Some(i) => x.inc.idx = i,
+                _ => consistent = false,
+            }
         }
         let mut expected = self.markers.front().map(|m| m.idx);
         for idx in self.markers.iter().skip(1).map(|m| m.idx).chain(self.reopen.as_ref().map(|r| r.idx)) {
@@ -489,6 +524,8 @@ impl Player {
         self.prepared = None;
         self.prepare_failed = None;
         self.reopen = None;
+        self.xfade = None;
+        self.xfade_declined = None;
         self.pending_start = false;
         self.markers.clear();
         self.end_pending = false;
@@ -519,8 +556,11 @@ impl Player {
 
     /// The DSP stages of queue entry `idx`'s signal path, in chain order.
     fn dsp_stages(&self, idx: usize, dsp_allowed: bool) -> Vec<Stage> {
-        vec![rg_stage(&self.rg_for(idx), self.rg_mode, dsp_allowed), eq_stage(&self.eq_settings, dsp_allowed)]
+        vec![rg_stage(&self.rg_for(idx), self.rg_mode, dsp_allowed), eq_stage(&self.eq_settings, dsp_allowed), crossfade_stage(self.crossfade_secs, dsp_allowed)]
     }
+
+    /// The next track is opened early enough to start a crossfade with its lead time.
+    fn preroll_secs(&self) -> f64 { self.cfg.preroll_secs.max(self.crossfade_secs as f64 + XFADE_LEAD_SECS + 1.0) }
 
     /// Rewrites the DSP stages of every held track's signal path after a setting changed. Tracks decoded
     /// ahead (gapless) get the new stages too, so they show them when they become audible. Only the
@@ -680,19 +720,25 @@ impl Player {
         self.finish();
     }
 
-    fn begin_feeding(&mut self, idx: usize, dec: Box<dyn TrackDecoder>, plan: PipelinePlan, start_ms: u64, reuse: Option<StreamResampler>) {
+    /// Marks where track `idx` starts in the ring (at everything written so far).
+    fn push_marker(&mut self, idx: usize, info: &SourceInfo, plan: &PipelinePlan, start_ms: u64) {
         let dsp = self.dsp_stages(idx, self.dsp_allowed());
         let a = self.active.as_ref().expect("stream open before feeding");
-        let info = dec.info().clone();
-        let signal = build_signal_path(&info, &plan, &a.info, self.effective_volume(), a.bluetooth.clone(), a.shared.underruns.load(Relaxed), dsp);
+        let signal = build_signal_path(info, plan, &a.info, self.effective_volume(), a.bluetooth.clone(), a.shared.underruns.load(Relaxed), dsp);
         self.markers.push_back(Marker {
             start: a.written_frames(), idx, start_ms, out_rate: plan.format.sample_rate, signal,
             duration_ms: info.total_frames.map(|f| f * 1000 / info.spec.sample_rate.max(1) as u64),
             listened_carry_ms: 0, reported: false,
         });
+    }
+
+    fn begin_feeding(&mut self, idx: usize, dec: Box<dyn TrackDecoder>, plan: PipelinePlan, start_ms: u64, reuse: Option<StreamResampler>) {
+        let info = dec.info().clone();
+        self.push_marker(idx, &info, &plan, start_ms);
         let mut chain = ProcessChain::new(plan, info.spec, reuse);
         chain.set_gain(self.rg_for(idx).linear());
         self.feeding = Some(Feeding { idx, dec, chain, decoded: start_ms * info.spec.sample_rate as u64 / 1000, eof: false });
+        self.xfade_declined = None;
     }
 
     // ---------- feeding ----------
@@ -720,9 +766,15 @@ impl Player {
                 if !self.try_reopen() { return; }
                 continue;
             }
+            if self.xfade.is_some() {
+                if self.active.as_ref().map_or(0, |a| a.prod.slots()) < MIN_FREE_BYTES { return; }
+                self.crossfade_step();
+                continue;
+            }
             let Some(feed) = self.feeding.as_mut() else { self.check_drained(); return; };
             if feed.eof { self.advance(); continue; }
             if self.active.as_ref().map_or(0, |a| a.prod.slots()) < MIN_FREE_BYTES { return; }
+            if self.maybe_start_crossfade() { continue; }
             let feed = self.feeding.as_mut().unwrap();
             match feed.dec.next_block() {
                 Ok(Some(block)) => {
@@ -736,6 +788,111 @@ impl Player {
                 Err(e) => { let idx = feed.idx; feed.eof = true; self.track_error(idx, &e); }
             }
         }
+    }
+
+    /// Enters the crossfade state when every condition in the Task 5 rules holds. Returns true if it did.
+    fn maybe_start_crossfade(&mut self) -> bool {
+        if self.crossfade_secs <= 0.0 || !self.dsp_allowed() { return false; }
+        let Some(feed) = &self.feeding else { return false };
+        if feed.chain.plan().passthrough != Passthrough::None || self.xfade_declined == Some(feed.idx) { return false; }
+        let Some((next, inc_dec)) = &self.prepared else { return false };
+        let next = *next;
+        if next == feed.idx || self.queue.auto_next(feed.idx) != Some(next) { return false; }
+        let (Some(a), Some(b)) = (self.queue.get(feed.idx), self.queue.get(next)) else { return false };
+        let pos = |e: &Entry| AlbumPos { album_id: e.album_id, disc: e.disc_no, track: e.track_no };
+        if same_album_in_order(pos(a), pos(b)) { return false; }
+        let (ai, bi) = (feed.dec.info(), inc_dec.info());
+        let (Some(a_total), Some(b_total)) = (ai.total_frames, bi.total_frames) else { return false };
+        let secs = |frames: u64, rate: u32| frames as f64 / rate.max(1) as f64;
+        let overlap = overlap_secs(self.crossfade_secs as f64, secs(a_total, ai.spec.sample_rate), secs(b_total, bi.spec.sample_rate));
+        let remaining = secs(a_total.saturating_sub(feed.decoded), ai.spec.sample_rate);
+        if overlap <= 0.0 || remaining > overlap + XFADE_LEAD_SECS { return false; }
+        let out_idx = feed.idx;
+        let (next, mut dec) = self.prepared.take().unwrap();
+        let current = self.active.as_ref().map(|a| (a.info.format, a.exclusive()));
+        let plan = self.plan_for(dec.as_mut(), current);
+        let Some((fmt, _)) = current.filter(|(f, ex)| *f == plan.format && *ex == plan.exclusive) else {
+            self.prepared = Some((next, dec));
+            self.xfade_declined = Some(out_idx);
+            return false;
+        };
+        let spec = dec.info().spec;
+        let mut chain = ProcessChain::new(plan, spec, None);
+        chain.set_gain(self.rg_for(next).linear());
+        self.xfade = Some(Crossfade {
+            inc: Feeding { idx: next, dec, chain, decoded: 0, eof: false },
+            tail: vec![], tail_done: false, planned: (overlap * fmt.sample_rate as f64).round() as usize,
+            total: 0, pos: 0, mixed: 0, head: vec![], marker_pushed: false,
+        });
+        true
+    }
+
+    /// One unit of crossfade work: decode a block of the outgoing tail, write unmixed tail frames,
+    /// or mix and write a slice of the overlap. Finishes by handing feeding over to the incoming track.
+    fn crossfade_step(&mut self) {
+        const SLICE: usize = 4096;
+        let ch = self.active.as_ref().map_or(2, |a| a.info.format.channels as usize);
+        let mut x = self.xfade.take().expect("crossfade_step with xfade");
+        let Some(feed) = self.feeding.as_mut() else { return };
+        if !x.tail_done {
+            match feed.dec.next_block() {
+                Ok(Some(block)) => { feed.decoded += block.frames() as u64; feed.chain.render(&block, &mut x.tail); }
+                Ok(None) => { feed.chain.render_flush(&mut x.tail); x.tail_done = true; }
+                Err(e) => { let idx = feed.idx; feed.chain.render_flush(&mut x.tail); x.tail_done = true; self.track_error(idx, &e); }
+            }
+            if x.tail_done { x.total = x.planned.min(x.tail.len() / ch); }
+            self.xfade = Some(x);
+            return;
+        }
+        let tail_frames = x.tail.len() / ch;
+        let unmixed_end = tail_frames - x.total;
+        let mut bytes = Vec::new();
+        if x.pos < unmixed_end {
+            let n = (unmixed_end - x.pos).min(SLICE);
+            feed.chain.encode(&x.tail[x.pos * ch..(x.pos + n) * ch], &mut bytes);
+            x.pos += n;
+            self.push_bytes(bytes);
+            self.xfade = Some(x);
+            return;
+        }
+        if !x.marker_pushed {
+            let info = x.inc.dec.info().clone();
+            let plan = x.inc.chain.plan().clone();
+            self.push_marker(x.inc.idx, &info, &plan, 0);
+            x.marker_pushed = true;
+        }
+        if x.mixed < x.total {
+            let n = (x.total - x.mixed).min(SLICE);
+            while x.head.len() / ch < n && !x.inc.eof {
+                match x.inc.dec.next_block() {
+                    Ok(Some(block)) => { x.inc.decoded += block.frames() as u64; x.inc.chain.render(&block, &mut x.head); }
+                    Ok(None) => { x.inc.chain.render_flush(&mut x.head); x.inc.eof = true; }
+                    Err(e) => { let idx = x.inc.idx; x.inc.eof = true; self.track_error(idx, &e); }
+                }
+            }
+            let mut mixed = Vec::with_capacity(n * ch);
+            for f in 0..n {
+                let (go, gi) = equal_power((x.mixed + f) as f64 / x.total as f64);
+                for c in 0..ch {
+                    let a = x.tail.get((x.pos + f) * ch + c).copied().unwrap_or(0.0);
+                    let b = x.head.get(f * ch + c).copied().unwrap_or(0.0);
+                    mixed.push(a * go + b * gi);
+                }
+            }
+            x.head.drain(..(n * ch).min(x.head.len()));
+            x.inc.chain.encode(&mixed, &mut bytes);
+            x.mixed += n;
+            x.pos += n;
+            self.push_bytes(bytes);
+            self.xfade = Some(x);
+            return;
+        }
+        // Overlap done: the incoming track's already-rendered rest is written, then it feeds normally.
+        if !x.head.is_empty() { x.inc.chain.encode(&x.head, &mut bytes); self.push_bytes(bytes); }
+        self.feeding = Some(x.inc);
+        self.prepared = None;
+        self.prepare_failed = None;
+        self.xfade_declined = None;
     }
 
     fn push_bytes(&mut self, bytes: Vec<u8>) {
@@ -773,7 +930,7 @@ impl Player {
         let info = feed.dec.info();
         let Some(total) = info.total_frames else { return };
         let remaining_secs = total.saturating_sub(feed.decoded) as f64 / info.spec.sample_rate.max(1) as f64;
-        if remaining_secs <= self.cfg.preroll_secs {
+        if remaining_secs <= self.preroll_secs() {
             match decode::open(&self.queue.entries()[next].path) {
                 Ok(dec) => self.prepared = Some((next, dec)),
                 Err(_) => self.prepare_failed = Some(next),
@@ -871,6 +1028,7 @@ impl Player {
             a.shared.fade_out.store(false, Release);
         }
         self.reopen = None;
+        self.xfade = None;
         self.end_pending = false;
         self.markers.clear();
         self.shown_idx = None;
