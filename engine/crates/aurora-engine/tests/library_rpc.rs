@@ -1,4 +1,6 @@
 mod common;
+use std::io::Write;
+
 use common::{fixture, Engine};
 use serde_json::{json, Value};
 
@@ -295,4 +297,18 @@ fn lyrics_come_from_the_library() {
     assert_eq!(e.call("lyrics.get", json!({ "trackId": 999_999 }))["error"]["code"], -32001);
     let mut bare = Engine::spawn();
     assert_eq!(bare.call("lyrics.get", json!({ "trackId": 1 }))["error"]["code"], -32008);
+}
+
+#[test]
+fn slow_library_reads_do_not_hold_up_player_calls() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().to_string_lossy().to_string();
+    let mut e = Engine::spawn_with(&["rpc", "--data-dir", &data], &[("AURORA_TEST_IO_DELAY_MS", "1500")]);
+    writeln!(e.stdin, r#"{{"jsonrpc":"2.0","id":901,"method":"lyrics.get","params":{{"trackId":424242}}}}"#).unwrap();
+    writeln!(e.stdin, r#"{{"jsonrpc":"2.0","id":902,"method":"player.state","params":{{}}}}"#).unwrap();
+    e.stdin.flush().unwrap();
+    let first = e.wait_for(|v| v["id"] == 901 || v["id"] == 902);
+    assert_eq!(first["id"], 902, "player.state must not wait behind a slow lyrics.get");
+    let lyrics = e.wait_for(|v| v["id"] == 901);
+    assert!(lyrics["error"].is_object(), "an unknown track is still answered: {lyrics}");
 }

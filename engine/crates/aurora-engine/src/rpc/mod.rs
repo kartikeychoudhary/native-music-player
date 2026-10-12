@@ -1,5 +1,6 @@
 mod dispatch;
 mod dsp;
+mod io_worker;
 mod library_methods;
 mod library_service;
 mod session;
@@ -76,6 +77,14 @@ fn record_play(svc: &LibraryService, out: &Writer, track_id: Option<i64>, path: 
 
 fn error_response(id: Value, code: i32, message: impl Into<String>) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": RpcError { code, message: message.into(), data: None } })
+}
+
+/// Writes the response to request `id`.
+fn reply(out: &Writer, id: Value, r: Result<Value, RpcError>) {
+    match r {
+        Ok(v) => out.send(&json!({ "jsonrpc": "2.0", "id": id, "result": v })),
+        Err(e) => out.send(&json!({ "jsonrpc": "2.0", "id": id, "error": e })),
+    }
 }
 
 /// Parses one request line (see the Task 24 interface): -32700 for bad JSON, -32600 for JSON that
@@ -164,6 +173,17 @@ pub fn run(opts: RunOptions) -> i32 {
     });
 
     let ctx = Ctx { player, backend, queue, library: library.clone(), library_error: library_error.map(|e| e.to_string()), dsp: Mutex::new(dsp_store), out: out.clone() };
+    let mut io = {
+        let (lib, lib_err, out) = (library.clone(), ctx.library_error.clone(), out.clone());
+        // Test hook: stands in for a slow disk (see tests/library_rpc.rs).
+        let delay = std::env::var("AURORA_TEST_IO_DELAY_MS").ok().and_then(|s| s.parse::<u64>().ok());
+        io_worker::IoWorker::spawn(move |job| {
+            if let Some(ms) = delay { std::thread::sleep(Duration::from_millis(ms)); }
+            let r = library_methods::dispatch(lib.as_deref(), lib_err.as_deref(), &job.method, job.params)
+                .unwrap_or_else(|| Err(RpcError { code: -32601, message: format!("method not found: {}", job.method), data: None }));
+            reply(&out, job.id, r);
+        })
+    };
     let mut stdin = std::io::stdin().lock();
     let mut buf = Vec::new();
     loop {
@@ -179,14 +199,19 @@ pub fn run(opts: RunOptions) -> i32 {
         let line = line.trim();
         if line.is_empty() { continue; }
         let (id, req) = match parse_line(line) { Ok(p) => p, Err(resp) => { out.send(&resp); continue; } };
+        if let Some(id) = &id && io_worker::is_slow(&req.method) {
+            io.submit(io_worker::Job { id: id.clone(), method: req.method, params: req.params });
+            continue;
+        }
         let result = dispatch(&ctx, &req.method, req.params);
         let Some(id) = id else { continue }; // notifications from the client get no response
         match result {
-            Ok(Outcome::Reply(v)) => out.send(&json!({ "jsonrpc": "2.0", "id": id, "result": v })),
-            Ok(Outcome::Shutdown) => { out.send(&json!({ "jsonrpc": "2.0", "id": id, "result": Value::Null })); break; }
-            Err(e) => out.send(&json!({ "jsonrpc": "2.0", "id": id, "error": e })),
+            Ok(Outcome::Reply(v)) => reply(&out, id, Ok(v)),
+            Ok(Outcome::Shutdown) => { reply(&out, id, Ok(Value::Null)); break; }
+            Err(e) => reply(&out, id, Err(e)),
         }
     }
+    io.shutdown();
     stop_saver.store(true, SeqCst);
     if let Some(j) = saver { let _ = j.join(); }
     if let Some(dir) = &opts.data_dir {
