@@ -18,6 +18,8 @@ import type { IdParams } from '@protocol/IdParams'
 import type { ImportResult } from '@protocol/ImportResult'
 import type { LibraryChanged } from '@protocol/LibraryChanged'
 import type { ListQuery } from '@protocol/ListQuery'
+import type { Lyrics } from '@protocol/Lyrics'
+import type { LyricsParams } from '@protocol/LyricsParams'
 import type { ModeParams } from '@protocol/ModeParams'
 import type { NameParams } from '@protocol/NameParams'
 import type { Page } from '@protocol/Page'
@@ -113,6 +115,7 @@ export type Methods = {
   'dsp.deletePreset': M<NameParams, DspState>
   'dsp.setCrossfade': M<CrossfadeParams, DspState>
   'dsp.setReplayGain': M<ReplayGainParams, DspState>
+  'lyrics.get': M<LyricsParams, Lyrics | null>
 }
 
 export type Events = {
@@ -138,6 +141,7 @@ export const ALLOWED_METHODS = [
   'playlists.list', 'playlists.get', 'playlists.create', 'playlists.rename', 'playlists.delete', 'playlists.addTracks',
   'playlists.removeItems', 'playlists.reorder', 'playlists.importM3u', 'playlists.exportM3u',
   'dsp.get', 'dsp.presets', 'dsp.setEq', 'dsp.setEqEnabled', 'dsp.savePreset', 'dsp.deletePreset', 'dsp.setCrossfade', 'dsp.setReplayGain',
+  'lyrics.get',
 ] as const satisfies readonly (keyof Methods)[]
 
 // Compile-time check that every typed method is allowed (and nothing else is).

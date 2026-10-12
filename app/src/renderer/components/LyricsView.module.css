@@ -1,0 +1,9 @@
+.lyrics { list-style: none; margin: 0; padding: 24px 0 40vh; display: flex; flex-direction: column; gap: 14px; }
+.line { display: block; text-align: left; font-size: 22px; font-weight: 700; line-height: 1.35; color: var(--text-muted); background: none; padding: 0; cursor: default; }
+.lyrics[data-synced] .line { cursor: pointer; }
+.lyrics[data-synced] .line:hover { color: var(--text); }
+.lyrics:not([data-synced]) .line { color: var(--text); font-weight: 500; font-size: 17px; }
+li[aria-current='true'] .line { color: var(--accent); }
+li[aria-current='true'] .line span:not([data-sung]) { color: var(--text); }
+.gap { height: 10px; }
+.message { padding: 24px 0; }
