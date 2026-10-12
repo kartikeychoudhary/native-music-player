@@ -1,0 +1,178 @@
+name: Release
+# Builds installers for every OS and arch from a v* tag and attaches them to a DRAFT GitHub release.
+# A human publishes the draft after the manual test matrix (docs/RELEASING.md); electron-updater
+# only sees published releases.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: Also create a draft release (otherwise build and test only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: 24 }
+      - id: v
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then node app/build-tools/check-version.ts --tag "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          else node app/build-tools/check-version.ts >> "$GITHUB_OUTPUT"; fi
+
+  engine:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: windows-2025, target: x86_64-pc-windows-msvc, dir: win32-x64, os: windows }
+          - { runner: windows-11-arm, target: aarch64-pc-windows-msvc, dir: win32-arm64, os: windows }
+          - { runner: macos-15-intel, target: x86_64-apple-darwin, dir: darwin-x64, os: macos }
+          - { runner: macos-15, target: aarch64-apple-darwin, dir: darwin-arm64, os: macos }
+          - { runner: ubuntu-22.04, target: x86_64-unknown-linux-gnu, dir: linux-x64, os: linux }
+          - { runner: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, dir: linux-arm64, os: linux }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    defaults: { run: { shell: bash } }
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '12.0'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.99.0
+        with: { targets: '${{ matrix.target }}', components: llvm-tools }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: engine, key: 'release-${{ matrix.target }}' }
+      - name: System packages (Linux)
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang pkg-config libasound2-dev libpipewire-0.3-dev libspa-0.2-dev
+      - name: System packages (macOS)
+        if: matrix.os == 'macos'
+        run: brew list cmake >/dev/null 2>&1 || brew install cmake
+      - name: Build with fdk-aac
+        run: cargo build --release --locked --manifest-path engine/Cargo.toml -p aurora-engine --target ${{ matrix.target }}
+      - name: Build without fdk-aac
+        run: cargo build --release --locked --manifest-path engine/Cargo.toml -p aurora-engine --target ${{ matrix.target }} --no-default-features --target-dir engine/target/nofdk
+      - name: Stage
+        run: |
+          exe=aurora-engine; [ "${{ matrix.os }}" = windows ] && exe=aurora-engine.exe
+          mkdir -p staged/standard staged/nofdk
+          cp "engine/target/${{ matrix.target }}/release/$exe" staged/standard/
+          cp "engine/target/nofdk/${{ matrix.target }}/release/$exe" staged/nofdk/
+      - name: Check linked libraries
+        run: for v in standard nofdk; do bash app/build-tools/check-engine-deps.sh staged/$v/aurora-engine* ${{ matrix.os }}; done
+      - name: Check the engine.ready handshake
+        env: { AURORA_OUTPUT: 'null', AURORA_OSMEDIA: '0', VERSION: '${{ needs.version.outputs.version }}' }
+        run: |
+          for v in standard nofdk; do
+            ready=$(staged/$v/aurora-engine* rpc < /dev/null | head -n 1)
+            echo "$v: $ready"
+            echo "$ready" | grep -q '"method":"engine.ready"' || { echo "no engine.ready"; exit 1; }
+            echo "$ready" | grep -q "\"version\":\"$VERSION\"" || { echo "engine version is not $VERSION"; exit 1; }
+            if [ $v = standard ]; then echo "$ready" | grep -q '"fdk-aac"' || { echo "fdk-aac missing"; exit 1; }
+            else ! echo "$ready" | grep -q '"fdk-aac"' || { echo "fdk-aac present in the no-fdk build"; exit 1; }; fi
+          done
+      - name: Archive (tar keeps the executable bit; upload-artifact does not)
+        run: tar -cf engine-${{ matrix.dir }}.tar -C staged .
+      - uses: actions/upload-artifact@v4
+        with: { name: 'engine-${{ matrix.dir }}', path: 'engine-${{ matrix.dir }}.tar', if-no-files-found: error }
+
+  package:
+    needs: [version, engine]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: windows-2025, os: windows, platform: win32, exe: dist/win-unpacked/Aurora.exe }
+          - { runner: macos-15, os: macos, platform: darwin, exe: dist/mac-arm64/Aurora.app/Contents/MacOS/Aurora }
+          - { runner: ubuntu-22.04, os: linux, platform: linux, exe: dist/linux-unpacked/aurora }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    defaults: { run: { shell: bash } }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.99.0 # cargo metadata for THIRD_PARTY_LICENSES.txt
+      - uses: actions/setup-node@v5
+        with: { node-version: 24, cache: npm, cache-dependency-path: app/package-lock.json }
+      - name: System packages (Linux)
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm xvfb
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - uses: actions/download-artifact@v4
+        with: { pattern: 'engine-${{ matrix.platform }}-*', path: artifacts }
+      - name: Unpack engines
+        run: |
+          for arch in x64 arm64; do
+            mkdir -p engines/$arch
+            tar -xf artifacts/engine-${{ matrix.platform }}-$arch/engine-${{ matrix.platform }}-$arch.tar -C engines/$arch
+          done
+      - run: cargo fetch --locked --manifest-path engine/Cargo.toml
+      - run: npm ci --prefix app
+      - name: Package
+        env:
+          CSC_LINK: ${{ matrix.os == 'windows' && secrets.WIN_CSC_LINK || matrix.os == 'macos' && secrets.MAC_CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ matrix.os == 'windows' && secrets.WIN_CSC_KEY_PASSWORD || matrix.os == 'macos' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$CSC_LINK" ]; then signed=--signed; else signed=; export CSC_IDENTITY_AUTO_DISCOVERY=false; fi
+          node app/build-tools/package-ci.ts --platform ${{ matrix.platform }} $signed
+      - name: Smoke test the packaged app (Linux)
+        if: matrix.os == 'linux'
+        env: { AURORA_PACKAGED_EXE: '${{ matrix.exe }}' }
+        run: xvfb-run -a npm --prefix app run e2e:packaged
+      - name: Smoke test the packaged app (Windows, macOS)
+        if: matrix.os != 'linux'
+        env: { AURORA_PACKAGED_EXE: '${{ matrix.exe }}' }
+        run: npm --prefix app run e2e:packaged
+      # upload-artifact keeps the folders above the files when the paths differ (app/dist and
+      # app/dist-nofdk), and the release job expects a flat list, so gather the files first.
+      - name: Collect release files
+        run: |
+          shopt -s nullglob
+          mkdir upload
+          for f in app/dist/*.exe app/dist/*.zip app/dist/*.dmg app/dist/*.AppImage app/dist/*.deb app/dist/*.rpm app/dist/*.blockmap app/dist/latest*.yml app/dist-nofdk/*.zip app/dist-nofdk/*.tar.gz; do
+            cp "$f" upload/
+          done
+          ls -l upload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'dist-${{ matrix.os }}'
+          path: upload
+          if-no-files-found: error
+
+  release:
+    needs: [version, package]
+    if: github.ref_type == 'tag' || inputs.draft
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with: { pattern: 'dist-*', path: dist, merge-multiple: true }
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Create the draft release
+        env: { GH_TOKEN: '${{ github.token }}', VERSION: '${{ needs.version.outputs.version }}' }
+        run: |
+          pre=; case "$VERSION" in *-*) pre=--prerelease ;; esac
+          gh release create "v$VERSION" dist/* --draft $pre --target "$GITHUB_SHA" --title "Aurora $VERSION" --generate-notes

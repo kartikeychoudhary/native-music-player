@@ -74,6 +74,8 @@ jobs:
       - uses: actions/setup-node@v5
         with: { node-version: 24, cache: npm, cache-dependency-path: app/package-lock.json }
       - run: npm ci --prefix app
+      - name: Versions agree
+        run: node app/build-tools/check-version.ts
       - run: npm --prefix app run typecheck
       - run: npm --prefix app test
       - name: Build engine for e2e
@@ -84,3 +86,5 @@ jobs:
       - name: E2E (Windows/macOS)
         if: runner.os != 'Linux'
         run: npm --prefix app run e2e
+      - name: Third-party licenses
+        run: node app/build-tools/licenses.ts

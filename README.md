@@ -2,7 +2,31 @@
 
 Aurora is a native hi-res music player: a Rust audio engine (`aurora-engine`) runs as a sidecar process and an Electron app provides the UI. The two talk JSON-RPC 2.0 over stdio.
 
-This is milestone 3: the audio engine, the app shell, the music library and the first extras. Playback of local files, the signal-path panel, the bit-perfect toggle, library browsing (albums, artists, genres, playlists), search and the play queue work, and so do the equalizer, crossfade, ReplayGain, synced lyrics, the spectrum visualizer, the mini-player and the tray.
+This is milestone 4: the audio engine, the app shell, the music library and the extras, now with installers and updates. Playback of local files, the signal-path panel, the bit-perfect toggle, library browsing (albums, artists, genres, playlists), search and the play queue work, and so do the equalizer, crossfade, ReplayGain, synced lyrics, the spectrum visualizer, the mini-player and the tray.
+
+## Install
+
+Download the assets for your system from the [latest release](https://github.com/kartikeychoudhary/native-music-player/releases/latest). Pick `x64` for Intel and AMD processors and `arm64` for Apple silicon and other ARM machines.
+
+| OS | Download | Notes |
+| --- | --- | --- |
+| Windows | `Aurora-<version>-win-setup.exe` | Installer for x64 and arm64. It installs per user and updates itself. |
+| Windows | `Aurora-<version>-win-<arch>.zip` | Portable. Unzip and run `Aurora.exe`. |
+| macOS | `Aurora-<version>-mac-<arch>.dmg` | Drag Aurora to Applications. |
+| Linux | `Aurora-<version>-linux-<arch>.AppImage` | Run `chmod +x` on it, then start it. |
+| Linux | `.deb` and `.rpm` | For Debian, Ubuntu, Fedora and relatives. |
+
+`SHA256SUMS.txt` lists a checksum for every file.
+
+**No-fdk archives.** The files ending in `-nofdk.zip` and `-nofdk.tar.gz` are portable builds without the Fraunhofer FDK AAC decoder, for distributions that treat it as non-free. Everything else works the same, but HE-AAC files report "codec not in this build".
+
+**Unsigned Windows builds.** SmartScreen shows "Windows protected your PC". Choose More info, then Run anyway.
+
+**Unsigned macOS builds.** macOS blocks the first launch. Open System Settings, Privacy & Security, and choose Open Anyway. If macOS says the app "is damaged", run `xattr -dr com.apple.quarantine /Applications/Aurora.app` and open it again.
+
+**Linux.** The deb and rpm need the PipeWire client library (`libpipewire-0.3`), which current desktop distributions install by default.
+
+**Minimum versions.** macOS 12, Windows 10 1809 or newer (Electron's floor), and glibc 2.35, which means Ubuntu 22.04 or newer.
 
 ## Prerequisites
 
