@@ -7,6 +7,10 @@ export type { UpdateMode, UpdateState }
 export const RELEASES = { owner: 'kartikeychoudhary', repo: 'native-music-player' } as const
 export const FIRST_CHECK_MS = 10_000
 export const CHECK_EVERY_MS = 6 * 60 * 60 * 1000
+/** A request that hangs would leave the state at `checking` for good, skipping every later check. */
+export const CHECK_TIMEOUT_MS = 30_000
+/** How long electron-updater gets to quit the app after `quitAndInstall` before Aurora quits itself. */
+export const QUIT_FALLBACK_MS = 5_000
 
 /** Which builds install updates themselves; everything else only links to the release page. */
 export function updateMode(kind: InstallKind, build: BuildInfo): UpdateMode {
@@ -33,7 +37,7 @@ export function releaseUrl(version: string): string {
 
 /** The newest published (not draft, not prerelease) version on GitHub, or null if there is none. */
 export async function latestPublishedVersion(fetchFn: typeof fetch): Promise<string | null> {
-  const r = await fetchFn(`https://api.github.com/repos/${RELEASES.owner}/${RELEASES.repo}/releases/latest`, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Aurora' } })
+  const r = await fetchFn(`https://api.github.com/repos/${RELEASES.owner}/${RELEASES.repo}/releases/latest`, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Aurora' }, signal: AbortSignal.timeout(CHECK_TIMEOUT_MS) })
   if (r.status === 404) return null
   if (!r.ok) throw new Error(`GitHub answered ${r.status}`)
   const j = (await r.json()) as { tag_name?: unknown }
@@ -59,6 +63,8 @@ export interface ControllerDeps {
   latestVersion: () => Promise<string | null>
   /** Stops the engine so the installer can replace its binary. */
   beforeInstall: () => Promise<void>
+  /** Quits the app (the fallback when quitAndInstall declines to). */
+  quit: () => void
   onState: (s: UpdateState) => void
   setTimer: (fn: () => void, ms: number) => unknown
   setRepeat: (fn: () => void, ms: number) => unknown
@@ -96,7 +102,9 @@ export function createUpdateController(d: ControllerDeps) {
     set({ status: 'checking' })
     try {
       if (d.mode === 'auto') {
-        await updater().checkForUpdates()
+        const r = (await updater().checkForUpdates()) as { downloadPromise?: Promise<unknown> } | null
+        // A failed download already reached `fail` through the 'error' event, but electron-updater also rejects this promise.
+        void r?.downloadPromise?.catch(() => {})
         // electron-updater emits its events before resolving; one that resolved silently (inactive updater) found nothing.
         if (state.status === 'checking') set({ status: 'current' })
       } else {
@@ -117,6 +125,8 @@ export function createUpdateController(d: ControllerDeps) {
       if (state.status !== 'ready' || !au) return
       await d.beforeInstall()
       au.quitAndInstall(true, true)
+      // quitAndInstall returns without quitting when its install step fails; the engine is already stopped, so quit cleanly.
+      d.setTimer(() => d.quit(), QUIT_FALLBACK_MS)
     },
   }
 }

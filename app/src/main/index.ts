@@ -161,6 +161,7 @@ app.whenReady().then(() => {
     autoUpdater: () => { const { autoUpdater } = require('electron-updater') as typeof import('electron-updater'); autoUpdater.logger = { info: engineLog, warn: engineLog, error: engineLog, debug: () => {} } as never; return autoUpdater },
     latestVersion: () => latestPublishedVersion(net.fetch as unknown as typeof fetch),
     beforeInstall: async () => { quitting = true; windows.saveMainBounds(); settings.flush(); await supervisor.stop() },
+    quit: () => app.quit(),
     onState: (s) => windows.send('update.state', s),
     setTimer: (fn, ms) => setTimeout(fn, ms), setRepeat: (fn, ms) => setInterval(fn, ms),
   })

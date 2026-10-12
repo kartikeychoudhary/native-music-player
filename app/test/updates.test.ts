@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
 import { DEV_BUILD } from '../src/main/buildInfo'
-import { CHECK_EVERY_MS, FIRST_CHECK_MS, createUpdateController, isNewer, latestPublishedVersion, releaseUrl, updateMode, type UpdateState } from '../src/main/updates'
+import { CHECK_EVERY_MS, CHECK_TIMEOUT_MS, FIRST_CHECK_MS, QUIT_FALLBACK_MS, createUpdateController, isNewer, latestPublishedVersion, releaseUrl, updateMode, type UpdateState } from '../src/main/updates'
 
 const signed = { ...DEV_BUILD, macSigned: true }
 const nofdk = { ...DEV_BUILD, variant: 'nofdk' as const }
@@ -34,9 +34,11 @@ describe('versions', () => {
     expect(releaseUrl('0.2.0')).toBe('https://github.com/kartikeychoudhary/native-music-player/releases/tag/v0.2.0')
   })
   it('reads the latest published release, treating 404 as none and other failures as errors', async () => {
-    const ok = vi.fn(async (_url: string) => new Response(JSON.stringify({ tag_name: 'v0.3.1' }), { status: 200 }))
+    const ok = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ tag_name: 'v0.3.1' }), { status: 200 }))
     expect(await latestPublishedVersion(ok as unknown as typeof fetch)).toBe('0.3.1')
     expect(ok.mock.calls[0][0]).toBe('https://api.github.com/repos/kartikeychoudhary/native-music-player/releases/latest')
+    expect(ok.mock.calls[0][1]?.signal).toBeInstanceOf(AbortSignal)
+    expect(CHECK_TIMEOUT_MS).toBe(30_000)
     expect(await latestPublishedVersion((async () => new Response('', { status: 404 })) as unknown as typeof fetch)).toBeNull()
     await expect(latestPublishedVersion((async () => new Response('', { status: 403 })) as unknown as typeof fetch)).rejects.toThrow('GitHub answered 403')
   })
@@ -52,13 +54,14 @@ function setup(o: { mode: 'auto' | 'notify' | 'off'; latest?: () => Promise<stri
   const states: UpdateState[] = [], timers: { fn: () => void; ms: number; repeat: boolean }[] = []
   const updater = new FakeUpdater()
   const beforeInstall = vi.fn(async () => {})
+  const quit = vi.fn()
   const c = createUpdateController({
     mode: o.mode, currentVersion: '0.1.0', enabled: () => o.enabled ?? true,
-    autoUpdater: () => updater, latestVersion: o.latest ?? (async () => null), beforeInstall,
+    autoUpdater: () => updater, latestVersion: o.latest ?? (async () => null), beforeInstall, quit,
     onState: (s) => states.push(s),
     setTimer: (fn, ms) => timers.push({ fn, ms, repeat: false }), setRepeat: (fn, ms) => timers.push({ fn, ms, repeat: true }),
   })
-  return { c, states, timers, updater, beforeInstall }
+  return { c, states, timers, updater, beforeInstall, quit }
 }
 
 describe('update controller', () => {
@@ -102,6 +105,35 @@ describe('update controller', () => {
     await c.install()
     expect(beforeInstall).toHaveBeenCalledBefore(updater.quitAndInstall)
     expect(updater.quitAndInstall).toHaveBeenCalledWith(true, true)
+  })
+  it('quits the app shortly after quitAndInstall in case electron-updater declined to', async () => {
+    const { c, updater, timers, quit } = setup({ mode: 'auto' })
+    await c.check()
+    updater.emit('update-downloaded', { version: '0.2.0' })
+    await c.install()
+    expect(updater.quitAndInstall).toHaveBeenCalledWith(true, true)
+    expect(timers.map((t) => [t.ms, t.repeat])).toEqual([[QUIT_FALLBACK_MS, false]])
+    expect(quit).not.toHaveBeenCalled()
+    timers[0].fn()
+    expect(quit).toHaveBeenCalledTimes(1)
+  })
+  it('a failed automatic download goes back to what was known, without an error or banner state', async () => {
+    const { c, states, updater, timers } = setup({ mode: 'auto' })
+    updater.checkForUpdates.mockImplementation(async () => { updater.emit('update-available', { version: '0.2.0' }); updater.emit('error', new Error('offline')); return null })
+    c.start(); timers[0].fn(); await new Promise((r) => setTimeout(r, 0))
+    expect(states.map((s) => s.status)).toEqual(['checking', 'downloading', 'idle'])
+    expect(c.state).toEqual({ status: 'idle' })
+  })
+  it('a rejected download promise does not escape as an unhandled rejection', async () => {
+    const { c, updater } = setup({ mode: 'auto' })
+    const seen = vi.fn()
+    process.on('unhandledRejection', seen)
+    try {
+      updater.checkForUpdates.mockImplementation((async () => ({ downloadPromise: Promise.reject(new Error('offline')) })) as never)
+      await c.check()
+      await new Promise((r) => setTimeout(r, 10))
+      expect(seen).not.toHaveBeenCalled()
+    } finally { process.off('unhandledRejection', seen) }
   })
   it('install does nothing unless an update is ready', async () => {
     const { c, updater, beforeInstall } = setup({ mode: 'auto' })
