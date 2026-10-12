@@ -2,7 +2,7 @@
 
 Aurora is a native hi-res music player: a Rust audio engine (`aurora-engine`) runs as a sidecar process and an Electron app provides the UI. The two talk JSON-RPC 2.0 over stdio.
 
-This is milestone 2: the audio engine, the app shell and the music library. Playback of local files, the signal-path panel, the bit-perfect toggle, library browsing (albums, artists, genres, playlists), search and the play queue work. EQ, lyrics and the other planned features are not built yet.
+This is milestone 3: the audio engine, the app shell, the music library and the first extras. Playback of local files, the signal-path panel, the bit-perfect toggle, library browsing (albums, artists, genres, playlists), search and the play queue work, and so do the equalizer, crossfade, ReplayGain, synced lyrics, the spectrum visualizer, the mini-player and the tray.
 
 ## Prerequisites
 
@@ -73,6 +73,34 @@ Measured on Windows 11 Pro, Intel Core i5-12400F, 32 GB RAM, NVMe SSD (100,000 t
 | artist detail | 0.3 ms |
 
 Windows Defender real-time scanning can slow corpus generation and the first scan. If the scan misses its target, exclude the target directory or run the test a second time.
+
+## Sound
+
+Settings, Sound holds the DSP features. The EQ and ReplayGain apply to library tracks.
+
+- **EQ:** 10 bands with presets. Your own presets are kept in `dsp.json` in the data directory.
+- **Crossfade:** 0 to 12 s. With smart skip, tracks of an album played in order stay gapless; a manual skip uses a short fade instead.
+- **ReplayGain:** track, album or off. Gain is peak-protected so it never clips. It works for library tracks only, and Opus R128 gain tags are included.
+- **Bit-perfect:** the EQ, crossfade and ReplayGain are all off in bit-perfect mode, and the signal path says so.
+
+## Lyrics
+
+Lyrics come from a sidecar `.lrc` file next to the track (including enhanced word timing), from embedded lyrics tags, or from ID3 SYLT frames. Synced lyrics are preferred over plain text. The lyrics tab of Now Playing follows the current line and seeks when you click a line.
+
+## Windows
+
+- **Mini-player:** Ctrl/Cmd+M opens a small always-on-top window with the track and the playback controls. It remembers where you left it.
+- **Tray:** the tray menu has play/pause, next, previous, show/hide, the mini-player and the current track.
+- **Now Playing:** Ctrl/Cmd+L opens the expanded Now Playing view on the lyrics tab. It also has the spectrum visualizer.
+
+## Protocol
+
+Besides JSON-RPC, the engine sends binary spectrum frames on stdout: a `0x1E` marker byte, a u32 little-endian length, then a payload whose kind byte is `1` followed by 64 bins. Frames are sent only between `viz.subscribe` and `viz.unsubscribe`, so the visualizer costs nothing while Now Playing is closed.
+
+## Known limitations (M3)
+
+- Crossfade is not applied when the next track would need a different output format (for example a device change mid-transition).
+- Files opened from outside the library get no ReplayGain.
 
 ## Known limitations (M2)
 

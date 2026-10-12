@@ -71,3 +71,7 @@ License: MIT and/or Apache-2.0 (blake3: CC0-1.0 or Apache-2.0; notify: CC0-1.0)
 ## TanStack Router, TanStack Virtual, dnd-kit
 
 License: MIT
+
+## realfft, rustfft (spectrum analyzer FFT)
+
+License: MIT OR Apache-2.0

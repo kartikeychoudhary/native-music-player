@@ -33,6 +33,14 @@ describe('MiniApp', () => {
     expect(api.toggleMini).toHaveBeenCalledTimes(2)
   })
 
+  it('titles its window "Aurora mini-player" so it is told apart from the main window', () => {
+    const { api } = fakeApi()
+    usePlayer.setState({ api })
+    document.title = 'Aurora'
+    render(<MiniApp api={api} />)
+    expect(document.title).toBe('Aurora mini-player')
+  })
+
   it('says when nothing is playing', () => {
     const { api } = fakeApi()
     usePlayer.setState({ api })

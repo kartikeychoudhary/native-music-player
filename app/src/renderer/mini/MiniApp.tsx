@@ -12,6 +12,8 @@ export function MiniApp({ api }: { api: AuroraApi }) {
   const stamp = usePlayer((p) => p.stamp)
   const [, tick] = useState(0)
   const playing = state.status === 'playing'
+  // The page title becomes the native window title; without this the mini-player shows as plain "Aurora".
+  useEffect(() => { document.title = 'Aurora mini-player' }, [])
   useEffect(() => {
     if (!playing) return
     const id = setInterval(() => tick((n) => n + 1), 250)
