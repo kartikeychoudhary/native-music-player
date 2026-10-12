@@ -1,10 +1,14 @@
-.bar { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(320px, 1.4fr) minmax(320px, 1fr); align-items: center; gap: 16px; padding: 0 16px; background: var(--surface); border-top: 1px solid var(--border); height: var(--bar); }
+/* The right column takes its controls' width; track info and transport share the rest, so the
+   controls never spill over the transport. Narrow bars tighten the controls (container queries below). */
+.bar { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(280px, 1.4fr) auto; align-items: center; gap: 16px; padding: 0 16px; background: var(--surface); border-top: 1px solid var(--border); height: var(--bar); container-type: inline-size; }
 .now { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .meta { min-width: 0; }
 .title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
-.center { display: flex; flex-direction: column; align-items: center; gap: 6px; }
-.right { display: flex; align-items: center; justify-content: flex-end; gap: 12px; --control-h: 24px; }
+.center { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; }
+.right { display: flex; align-items: center; justify-content: flex-end; gap: 12px; --control-h: 24px; --device-max: 150px; min-width: 0; }
+/* Several badges can show at once (format, bit-perfect, codec): they clip rather than push the controls. */
+.badges { display: flex; min-width: 0; overflow: hidden; }
 /* Icons are flex-centred: as inline content they'd sit on the text baseline, above the row's centre. */
 .icon { display: inline-flex; align-items: center; justify-content: center; height: var(--control-h, 24px); color: var(--text-muted); }
 .icon:hover { color: var(--text); }
@@ -17,3 +21,12 @@
 .artButton { padding: 0; border-radius: var(--radius-sm); flex: none; }
 .linkish { display: block; max-width: 100%; text-align: left; padding: 0; background: none; color: inherit; font: inherit; font-weight: 600; cursor: pointer; }
 .linkish:hover { text-decoration: underline; }
+
+@container (max-width: 1180px) {
+  .right { gap: 8px; --device-max: 110px; }
+  .vol input { width: 64px; }
+}
+/* The format badge is also in Now Playing and the Signal path view. */
+@container (max-width: 1040px) {
+  .badges { display: none; }
+}

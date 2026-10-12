@@ -47,7 +47,7 @@ export function PlayerBar() {
         <SeekBar />
       </div>
       <div className={s.right}>
-        <FormatBadges signal={signal} />
+        <span className={s.badges}><FormatBadges signal={signal} /></span>
         <button className={s.icon} aria-label="Queue" aria-pressed={onQueue} onClick={() => (onQueue ? (router.history.canGoBack() ? router.history.back() : void navigate({ to: '/' })) : void navigate({ to: '/queue' }))}><ListMusic size={16} /></button>
         <button className={s.icon} aria-label={S.tabs.lyrics} aria-pressed={onLyrics} onClick={() => {
           if (onLyrics) { if (router.history.canGoBack()) router.history.back(); else void navigate({ to: '/' }) }

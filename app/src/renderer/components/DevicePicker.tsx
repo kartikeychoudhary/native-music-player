@@ -13,7 +13,7 @@ export function DevicePicker() {
       <Icon size={16} aria-hidden />
       <select
         aria-label="Output device" value={deviceId ?? ''} onChange={(e) => void usePlayer.getState().setDevice(e.target.value || null)}
-        style={{ maxWidth: 150, background: 'var(--raised)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 4, boxSizing: 'border-box', height: 'var(--control-h, 24px)', padding: '0 4px', font: '11px var(--font-ui)' }}
+        style={{ maxWidth: 'var(--device-max, 150px)', background: 'var(--raised)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 4, boxSizing: 'border-box', height: 'var(--control-h, 24px)', padding: '0 4px', font: '11px var(--font-ui)' }}
       >
         <option value="">System default</option>
         {devices.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
