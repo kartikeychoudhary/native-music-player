@@ -422,8 +422,11 @@ impl Player {
         for (m, id) in self.markers.iter_mut().zip(&h.markers) {
             match at(*id) { Some(i) => m.idx = i, None => consistent = false }
         }
-        if let Some(f) = self.feeding.as_mut() {
-            match at(h.feeding) { Some(i) => f.idx = i, None => consistent = false }
+        match at(h.feeding) {
+            Some(i) => if let Some(f) = self.feeding.as_mut() { f.idx = i },
+            // Its entry is gone. Drop it so the resync can't mistake it for whatever now has its index
+            // (during a crossfade the outgoing track still feeds behind the audible incoming one).
+            None => if self.feeding.take().is_some() { consistent = false },
         }
         if let Some(r) = self.reopen.as_mut() {
             match at(h.reopen) { Some(i) => r.idx = i, None => consistent = false }
