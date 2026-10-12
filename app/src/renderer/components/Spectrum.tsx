@@ -20,7 +20,8 @@ export function Spectrum({ className, height = 120 }: { className?: string; heig
       const ctx = c?.getContext('2d')
       if (!c || !ctx) return
       const dpr = window.devicePixelRatio || 1
-      const w = c.clientWidth * dpr, h = c.clientHeight * dpr
+      // Whole pixels: at a fractional DPR (125%/150%) the raw product never equals the integer c.width, so it would reallocate every frame.
+      const w = Math.round(c.clientWidth * dpr), h = Math.round(c.clientHeight * dpr)
       if (c.width !== w || c.height !== h) { c.width = w; c.height = h }
       ctx.clearRect(0, 0, w, h)
       ctx.fillStyle = getComputedStyle(c).getPropertyValue('--accent').trim() || '#FFB547'

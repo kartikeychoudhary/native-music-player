@@ -44,4 +44,34 @@ describe('Spectrum', () => {
     expect(api.setViz).toHaveBeenLastCalledWith(false)
     expect(deliver).toBeNull()
   })
+
+  it('sizes the backing store in whole pixels, so a fractional DPR does not reallocate it every frame', () => {
+    const { api } = fakeApi()
+    let deliver: ((b: Uint8Array) => void) | null = null
+    api.onSpectrum.mockImplementation((cb: (b: Uint8Array) => void) => { deliver = cb; return () => { deliver = null } })
+    usePlayer.setState({ api })
+    const ctx = { clearRect: vi.fn(), fillRect: vi.fn(), fillStyle: '' }
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx as never)
+    vi.stubGlobal('devicePixelRatio', 1.25)
+    vi.spyOn(HTMLCanvasElement.prototype, 'clientWidth', 'get').mockReturnValue(101)
+    vi.spyOn(HTMLCanvasElement.prototype, 'clientHeight', 'get').mockReturnValue(97)
+    const queue: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { queue.push(cb); return queue.length })
+    const desc = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'width')!
+    const widthWrites = vi.fn()
+    Object.defineProperty(HTMLCanvasElement.prototype, 'width', { ...desc, set(v: number) { widthWrites(v); desc.set!.call(this, v) } })
+    try {
+      render(<Spectrum />)
+      for (let i = 0; i < 3; i++) {
+        act(() => { deliver!(new Uint8Array(64).fill(128)) })
+        act(() => { queue.splice(0).forEach((cb) => cb(0)) })
+      }
+      expect(ctx.fillRect).toHaveBeenCalled()
+      expect(widthWrites.mock.calls).toEqual([[126]])
+      expect(screen.getByRole('img', { name: 'Spectrum' })).toHaveProperty('height', 121)
+    } finally {
+      Object.defineProperty(HTMLCanvasElement.prototype, 'width', desc)
+      vi.unstubAllGlobals()
+    }
+  })
 })
