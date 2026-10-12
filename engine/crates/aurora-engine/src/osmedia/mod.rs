@@ -1,5 +1,6 @@
 //! OS media integration (spec §3.10) through `souvlaki`: Windows SMTC, Linux MPRIS, macOS
 //! MPNowPlayingInfoCenter. Pure mapping functions plus one thread that owns the controls.
+pub mod app_id;
 #[cfg(windows)]
 mod win_window;
 

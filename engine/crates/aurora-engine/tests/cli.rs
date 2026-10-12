@@ -84,3 +84,14 @@ fn panics_exit_cleanly_with_code_70() {
     assert_eq!(out.status.code(), Some(70));
     assert!(String::from_utf8_lossy(&out.stderr).contains("test panic"));
 }
+
+#[test]
+fn rpc_accepts_an_app_user_model_id() {
+    let out = Command::new(env!("CARGO_BIN_EXE_aurora-engine"))
+        .args(["rpc", "--app-user-model-id", "io.github.kartikeychoudhary.aurora.test"])
+        .env("AURORA_OUTPUT", "null").env("AURORA_OSMEDIA", "0")
+        .stdin(Stdio::null()).output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let first = stdout.lines().next().unwrap_or_default();
+    assert!(first.contains("\"engine.ready\""), "stdout: {first}; stderr: {}", String::from_utf8_lossy(&out.stderr));
+}

@@ -24,6 +24,9 @@ enum Cmd {
         /// Folder for the library database, artwork cache and session. Without it nothing is persisted.
         #[arg(long, value_name = "DIR")]
         data_dir: Option<PathBuf>,
+        /// Windows AppUserModelID for this process (the media flyout's app name and icon).
+        #[arg(long, value_name = "ID")]
+        app_user_model_id: Option<String>,
     },
     /// Print what Aurora sees in a file.
     Probe { file: PathBuf },
@@ -68,7 +71,12 @@ fn main() {
         Some(Cmd::Devices { null }) => devices(null),
         Some(Cmd::Play { files, bit_perfect, device, null, speed }) => play(files, bit_perfect, device, null, speed),
         Some(Cmd::Panic) => panic!("test panic"),
-        Some(Cmd::Rpc { data_dir }) => rpc::run(rpc::RunOptions { data_dir }),
+        Some(Cmd::Rpc { data_dir, app_user_model_id }) => {
+            if let Some(id) = app_user_model_id && let Err(e) = osmedia::app_id::set_app_user_model_id(&id) {
+                tracing::warn!(error = %e, "couldn't set the AppUserModelID");
+            }
+            rpc::run(rpc::RunOptions { data_dir })
+        }
         None => rpc::run(rpc::RunOptions::default()),
     };
     std::process::exit(code);

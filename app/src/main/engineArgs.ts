@@ -3,8 +3,8 @@ export function resolveDataDir(o: { isPackaged: boolean; env: NodeJS.ProcessEnv 
   return (!o.isPackaged && o.env.AURORA_DATA_DIR) || o.userData
 }
 
-export function engineArgs(dataDir: string): string[] {
-  return ['rpc', '--data-dir', dataDir]
+export function engineArgs(dataDir: string, o: { appUserModelId?: string } = {}): string[] {
+  return ['rpc', '--data-dir', dataDir, ...(o.appUserModelId ? ['--app-user-model-id', o.appUserModelId] : [])]
 }
 
 /**

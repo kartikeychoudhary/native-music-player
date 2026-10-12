@@ -5,17 +5,22 @@ import { delimiter, isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { PROTOCOL_VERSION } from '@protocol/ProtocolVersion'
 import { AUDIO_EXTENSIONS, isAllowedMethod } from '@shared/api'
+import { APP_ID } from './appIdentity'
 import { ART_SCHEME, createArtHandler } from './artProtocol'
 import { readBuildInfo } from './buildInfo'
 import { engineArgs, resolveDataDir, usesSingleInstanceLock } from './engineArgs'
 import { enginePath } from './engine/enginePath'
 import { EngineSupervisor } from './engine/supervisor'
+import { installKind } from './installKind'
 import { logDir, logger } from './logs'
 import { safeSend } from './safeSend'
 import { SettingsStore } from './settings'
 import { createTray } from './tray'
 import { createVizHub, hookSender } from './viz'
 import { WindowManager } from './windows'
+
+// One Windows identity for the taskbar, notifications and (via the engine) the media flyout.
+if (process.platform === 'win32') app.setAppUserModelId(APP_ID)
 
 protocol.registerSchemesAsPrivileged([{ scheme: ART_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }])
 
@@ -38,7 +43,10 @@ const testEnv = (name: string): string | undefined => (app.isPackaged ? undefine
 const binary = () => enginePath({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath(), platform: process.platform, arch: process.arch, env: process.env })
 const dataDir = () => resolveDataDir({ isPackaged: app.isPackaged, env: process.env, userData: app.getPath('userData') })
 
-const supervisor = new EngineSupervisor(() => spawn(binary(), engineArgs(dataDir()), { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }), { protocolVersion: PROTOCOL_VERSION })
+// Only an NSIS install has a Start-menu shortcut carrying APP_ID for the engine's id to resolve against.
+const kind = installKind({ isPackaged: app.isPackaged, platform: process.platform, execPath: process.execPath, env: process.env })
+
+const supervisor = new EngineSupervisor(() => spawn(binary(), engineArgs(dataDir(), { appUserModelId: kind === 'nsis' ? APP_ID : undefined }), { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }), { protocolVersion: PROTOCOL_VERSION })
 
 // Spectrum subscriptions are refcounted across windows; the engine only has one on/off switch.
 const viz = createVizHub({

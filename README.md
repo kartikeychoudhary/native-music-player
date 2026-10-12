@@ -106,7 +106,7 @@ Besides JSON-RPC, the engine sends binary spectrum frames on stdout: a `0x1E` ma
 
 - DSF and DFF files are indexed with their file names as titles. Tag reading for the DSD containers comes later.
 - macOS media keys are best-effort.
-- The Windows media flyout shows the engine executable's name until the M4 installer sets an app identity. It may also not show cover art: the 300 px cache is WebP, which the system media transport controls did not load in testing.
+- The Windows media flyout shows Aurora's name and icon for installed copies. The portable zip has no Start-menu shortcut, so the flyout shows the engine's file name. Cover art may not appear there: the 300 px cache is WebP, which the system media controls did not load in testing.
 
 ## Bluetooth codec display
 
