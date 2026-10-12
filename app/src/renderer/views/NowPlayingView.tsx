@@ -61,7 +61,7 @@ export function NowPlayingView() {
           {tab === 'lyrics' && <LyricsView key={t.trackId ?? 'none'} trackId={t.trackId ?? null} />}
           {tab === 'queue' && <QueueView />}
           {tab === 'signal' && <SignalPathPanel signal={signal} />}
-          {tab === 'credits' && (t.trackId != null ? <Credits trackId={t.trackId} /> : <p className="muted">{S.lyricsLibraryOnly}</p>)}
+          {tab === 'credits' && (t.trackId != null ? <Credits trackId={t.trackId} /> : <p className="muted">{S.creditsLibraryOnly}</p>)}
         </div>
       </section>
     </div>

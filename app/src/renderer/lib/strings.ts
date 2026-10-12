@@ -10,6 +10,7 @@ export const S = Object.freeze({
   lyrics: 'Lyrics',
   noLyrics: 'No lyrics for this track. Add a .lrc file next to it, or embed lyrics in its tags.',
   lyricsLibraryOnly: 'Lyrics are available for tracks in your library.',
+  creditsLibraryOnly: 'Credits are available for tracks in your library.',
   openAurora: 'Open Aurora',
   closeMini: 'Close mini-player',
   miniPlayer: 'Mini-player',

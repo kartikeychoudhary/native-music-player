@@ -69,4 +69,15 @@ describe('Now Playing', () => {
     expect(await screen.findByText('Second song')).toBeTruthy()
     expect(screen.queryByText('Hello lyrics')).toBeNull()
   })
+
+  it('says credits (not lyrics) are library-only for a track outside the library', async () => {
+    const { api: a } = api({
+      'player.state': () => ({ ...playingState, track: { ...playingState.track, trackId: null } }),
+    })
+    await renderAt('/now-playing', a)
+    expect(await screen.findByRole('heading', { name: 'Dawn' })).toBeTruthy()
+    fireEvent.click(within(screen.getByRole('tablist')).getByRole('tab', { name: 'Credits' }))
+    expect(await screen.findByText('Credits are available for tracks in your library.')).toBeTruthy()
+    expect(screen.queryByText('Lyrics are available for tracks in your library.')).toBeNull()
+  })
 })
