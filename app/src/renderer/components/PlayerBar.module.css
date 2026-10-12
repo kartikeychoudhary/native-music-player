@@ -13,3 +13,7 @@
 .switch[aria-checked='true'] { border-color: var(--ok); color: var(--ok); }
 .vol { display: flex; align-items: center; height: var(--control-h); gap: 6px; color: var(--text-muted); }
 .vol input { width: 90px; accent-color: var(--accent); }
+
+.artButton { padding: 0; border-radius: var(--radius-sm); flex: none; }
+.linkish { display: block; max-width: 100%; text-align: left; padding: 0; background: none; color: inherit; font: inherit; font-weight: 600; cursor: pointer; }
+.linkish:hover { text-decoration: underline; }

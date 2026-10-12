@@ -1,4 +1,5 @@
 import { livePosition, type PlayerStore } from '../stores/player'
+import { useUi } from '../stores/ui'
 import { S } from './strings'
 
 // Controls that own their own keyboard behaviour; global shortcuts must not steal keys from them.
@@ -14,6 +15,13 @@ export function handleShortcut(e: KeyboardEvent, store: PlayerStore, now: number
   if (e.defaultPrevented || e.altKey) return false
   if (e.ctrlKey || e.metaKey) {
     if (e.key === 'm' || e.key === 'M') { e.preventDefault(); void store.api?.toggleMini(); return true }
+    if (e.key === 'l' || e.key === 'L') {
+      if (!go) return false
+      e.preventDefault()
+      useUi.getState().setNowPlayingTab('lyrics')
+      go('/now-playing')
+      return true
+    }
     const target = e.key === 'f' || e.key === 'F' ? '/search' : e.key === ',' ? '/settings' : null
     if (!target || !go) return false
     e.preventDefault()

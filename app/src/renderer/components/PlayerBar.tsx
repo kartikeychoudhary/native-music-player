@@ -1,5 +1,5 @@
 import { useNavigate, useRouter, useRouterState } from '@tanstack/react-router'
-import { Heart, ListMusic, Volume2, VolumeX } from 'lucide-react'
+import { Heart, ListMusic, Mic2, PictureInPicture2, Volume2, VolumeX } from 'lucide-react'
 import { S } from '../lib/strings'
 import { usePlayer } from '../stores/player'
 import { useUi } from '../stores/ui'
@@ -18,6 +18,10 @@ export function PlayerBar() {
   const navigate = useNavigate()
   const router = useRouter()
   const onQueue = useRouterState({ select: (r) => r.location.pathname === '/queue' })
+  const onNowPlaying = useRouterState({ select: (r) => r.location.pathname === '/now-playing' })
+  const npTab = useUi((u) => u.nowPlayingTab)
+  const onLyrics = onNowPlaying && npTab === 'lyrics'
+  const openNowPlaying = () => void navigate({ to: '/now-playing' })
   const { setVolume, setMode } = usePlayer.getState()
   const t = state.track
   const sub = t ? (t.artist ?? t.album ?? t.path.split(/[\\/]/).slice(-2, -1)[0]) : 'Open files to start'
@@ -31,9 +35,9 @@ export function PlayerBar() {
   return (
     <footer className={s.bar}>
       <div className={s.now}>
-        <Artwork id={t?.artworkId ?? null} size={64} px={46} alt={t?.title ?? ''} />
+        <button className={s.artButton} aria-label={S.openNowPlaying} onClick={openNowPlaying}><Artwork id={t?.artworkId ?? null} size={64} px={46} alt={t?.title ?? ''} /></button>
         <div className={s.meta}>
-          <div className={s.title} data-testid="now-title">{t?.title ?? S.nothingPlaying}</div>
+          <button className={`${s.title} ${s.linkish}`} data-testid="now-title" onClick={openNowPlaying}>{t?.title ?? S.nothingPlaying}</button>
           <div className={`${s.sub} muted`}>{sub}</div>
         </div>
         <button className={s.icon} aria-label={S.addCurrentToPlaylist} disabled={t?.trackId == null} onClick={like}><Heart size={16} /></button>
@@ -45,6 +49,11 @@ export function PlayerBar() {
       <div className={s.right}>
         <FormatBadges signal={signal} />
         <button className={s.icon} aria-label="Queue" aria-pressed={onQueue} onClick={() => (onQueue ? (router.history.canGoBack() ? router.history.back() : void navigate({ to: '/' })) : void navigate({ to: '/queue' }))}><ListMusic size={16} /></button>
+        <button className={s.icon} aria-label={S.tabs.lyrics} aria-pressed={onLyrics} onClick={() => {
+          if (onLyrics) { if (router.history.canGoBack()) router.history.back(); else void navigate({ to: '/' }) }
+          else { useUi.getState().setNowPlayingTab('lyrics'); openNowPlaying() }
+        }}><Mic2 size={16} /></button>
+        <button className={s.icon} aria-label={S.miniPlayer} onClick={() => void usePlayer.getState().api?.toggleMini()}><PictureInPicture2 size={16} /></button>
         <DevicePicker />
         <button
           role="switch" aria-checked={bitPerfect} aria-label="Bit-perfect" className={s.switch}

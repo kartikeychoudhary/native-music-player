@@ -3,6 +3,8 @@ import type { LucideIcon } from 'lucide-react'
 import type { Settings } from '@shared/settings'
 import { usePlayer } from './player'
 
+export type NowPlayingTab = 'lyrics' | 'queue' | 'signal' | 'credits'
+
 export interface MenuItem { label: string; icon?: LucideIcon; onSelect?: () => void; disabled?: boolean; items?: MenuItem[]; separator?: boolean }
 export interface Toast { id: number; kind: 'info' | 'error'; text: string }
 export interface PromptState { title: string; initial: string; confirm: string; resolve: (value: string | null) => void }
@@ -14,6 +16,10 @@ export interface UiStore {
   trackInfo: number | null
   prompt: PromptState | null
   searchText: string
+  nowPlayingTab: NowPlayingTab
+  setNowPlayingTab(t: NowPlayingTab): void
+  accentTint: boolean
+  setAccentTint(on: boolean): void
   setSidebar(expanded: boolean, persist?: boolean): void
   applySettings(s: Settings): void
   toast(kind: Toast['kind'], text: string): void
@@ -35,11 +41,18 @@ export const useUi = create<UiStore>()((set, get) => ({
   trackInfo: null,
   prompt: null,
   searchText: '',
+  nowPlayingTab: 'lyrics',
+  setNowPlayingTab: (t) => set({ nowPlayingTab: t }),
+  accentTint: false,
+  setAccentTint(on) {
+    set({ accentTint: on })
+    void usePlayer.getState().api?.setSettings({ accentTint: on }).catch(() => {})
+  },
   setSidebar(expanded, persist = true) {
     set({ sidebarExpanded: expanded })
     if (persist) void usePlayer.getState().api?.setSettings({ sidebarExpanded: expanded }).catch(() => {})
   },
-  applySettings: (s) => set({ sidebarExpanded: s.sidebarExpanded }),
+  applySettings: (s) => set({ sidebarExpanded: s.sidebarExpanded, accentTint: s.accentTint }),
   toast(kind, text) {
     const id = nextToast++
     set((s) => ({ toasts: [...s.toasts.slice(-3), { id, kind, text }] }))

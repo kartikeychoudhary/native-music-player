@@ -7,6 +7,7 @@ import { ArtistView } from './views/ArtistView'
 import { GenresView } from './views/GenresView'
 import { GenreView } from './views/GenreView'
 import { HomeView } from './views/HomeView'
+import { NowPlayingView } from './views/NowPlayingView'
 import { NotFoundView } from './views/NotFoundView'
 import { PlaylistsView } from './views/PlaylistsView'
 import { PlaylistView } from './views/PlaylistView'
@@ -24,14 +25,15 @@ const artistRoute = createRoute({ getParentRoute: () => rootRoute, path: '/artis
 const genresRoute = createRoute({ getParentRoute: () => rootRoute, path: '/genres', component: GenresView })
 const genreRoute = createRoute({ getParentRoute: () => rootRoute, path: '/genres/$genreId', component: GenreView })
 const signalRoute = createRoute({ getParentRoute: () => rootRoute, path: '/signal', component: SignalView })
-const searchRoute = createRoute({ getParentRoute: () => rootRoute, path: '/search', component: SearchView })
+const searchRoute = createRoute({ getParentRoute: () => rootRoute, path: '/search', component: SearchView })
 const playlistsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/playlists', component: PlaylistsView })
 const playlistRoute = createRoute({ getParentRoute: () => rootRoute, path: '/playlists/$playlistId', component: PlaylistView })
 const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/settings', component: SettingsView })
 const queueRoute = createRoute({ getParentRoute: () => rootRoute, path: '/queue', component: QueueView })
+const nowPlayingRoute = createRoute({ getParentRoute: () => rootRoute, path: '/now-playing', component: NowPlayingView })
 
 // Later tasks add their routes to this list.
-export const routeTree = rootRoute.addChildren([homeRoute, albumsRoute, albumRoute, artistsRoute, artistRoute, genresRoute, genreRoute, searchRoute, playlistsRoute, playlistRoute, queueRoute, settingsRoute, signalRoute])
+export const routeTree = rootRoute.addChildren([homeRoute, albumsRoute, albumRoute, artistsRoute, artistRoute, genresRoute, genreRoute, searchRoute, playlistsRoute, playlistRoute, queueRoute, nowPlayingRoute, settingsRoute, signalRoute])
 
 export function createAppRouter(history: RouterHistory = createHashHistory()) {
   return createRouter({ routeTree, history, defaultPreload: false })

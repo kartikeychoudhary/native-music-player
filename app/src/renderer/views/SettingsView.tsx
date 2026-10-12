@@ -18,6 +18,7 @@ export function SettingsView() {
   const dsp = useDsp((d) => d.state)
   const bitPerfect = mode === 'bitPerfect'
   const expanded = useUi((u) => u.sidebarExpanded)
+  const accentTint = useUi((u) => u.accentTint)
   const [removing, setRemoving] = useState<{ id: number; path: string } | null>(null)
   const lib = useLibrary.getState()
   return (
@@ -93,6 +94,9 @@ export function SettingsView() {
         <h2 className={v.sectionTitle}>{S.appearance}</h2>
         <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <input type="checkbox" checked={expanded} onChange={(e) => useUi.getState().setSidebar(e.target.checked)} /> {S.expandedSidebar}
+        </label>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input type="checkbox" checked={accentTint} onChange={(e) => useUi.getState().setAccentTint(e.target.checked)} /> {S.accentTint}
         </label>
       </section>
 

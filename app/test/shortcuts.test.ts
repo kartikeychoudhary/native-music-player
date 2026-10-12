@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { handleShortcut } from '../src/renderer/lib/shortcuts'
 import { usePlayer } from '../src/renderer/stores/player'
+import { useUi } from '../src/renderer/stores/ui'
 
 function press(target: Element, init: KeyboardEventInit & { key: string }) {
   const e = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init })
@@ -96,6 +97,13 @@ describe('M2 shortcuts', () => {
     const handled = handleShortcut(new KeyboardEvent('keydown', { key: 'm', ctrlKey: true }), { ...usePlayer.getState(), api: { toggleMini } as never }, 0)
     expect(handled).toBe(true)
     expect(toggleMini).toHaveBeenCalled()
+  })
+
+  it('Ctrl/Cmd+L goes to the Now Playing lyrics', () => {
+    const go = vi.fn()
+    expect(handleShortcut(new KeyboardEvent('keydown', { key: 'l', ctrlKey: true }), usePlayer.getState(), 0, go)).toBe(true)
+    expect(go).toHaveBeenCalledWith('/now-playing')
+    expect(useUi.getState().nowPlayingTab).toBe('lyrics')
   })
 
   it('arrow up/down change volume, but not in bit-perfect mode or inside a grid', () => {
