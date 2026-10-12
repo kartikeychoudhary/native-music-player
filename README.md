@@ -6,15 +6,15 @@ This is milestone 4: the audio engine, the app shell, the music library and the 
 
 ## Install
 
-Download the assets for your system from the [latest release](https://github.com/kartikeychoudhary/native-music-player/releases/latest). Pick `x64` for Intel and AMD processors and `arm64` for Apple silicon and other ARM machines.
+Download the assets for your system from the [latest release](https://github.com/kartikeychoudhary/native-music-player/releases/latest). Pick `x64` for Intel and AMD processors and `arm64` for Apple silicon and other ARM machines. Linux packages use the names their package managers expect, so `<arch>` there is `x86_64` (AppImage, rpm) or `amd64` (deb) for Intel and AMD, and `arm64` (AppImage, deb) or `aarch64` (rpm) for ARM.
 
 | OS | Download | Notes |
 | --- | --- | --- |
-| Windows | `Aurora-<version>-win-setup.exe` | Installer for x64 and arm64. It installs per user and updates itself. |
+| Windows | `Aurora-<version>-win-setup.exe` | Installer for x64 and arm64. It offers a per-user or per-machine install and updates itself. |
 | Windows | `Aurora-<version>-win-<arch>.zip` | Portable. Unzip and run `Aurora.exe`. |
 | macOS | `Aurora-<version>-mac-<arch>.dmg` | Drag Aurora to Applications. |
 | Linux | `Aurora-<version>-linux-<arch>.AppImage` | Run `chmod +x` on it, then start it. |
-| Linux | `.deb` and `.rpm` | For Debian, Ubuntu, Fedora and relatives. |
+| Linux | `Aurora-<version>-linux-<arch>.deb` and `.rpm` | For Debian, Ubuntu, Fedora and relatives. |
 
 `SHA256SUMS.txt` lists a checksum for every file.
 
