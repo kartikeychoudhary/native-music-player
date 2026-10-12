@@ -10,7 +10,12 @@ type Rect = { x: number; y: number; width: number; height: number }
 export const MINI_SIZE = { width: 340, height: 110 }
 const MARGIN = 24
 
-/** Where the mini-player opens: its saved spot when the whole window fits on a display, else bottom-right of the first one. */
+/** Work areas with the primary display's first, so `miniPosition`'s fallback lands on the primary display. */
+export function primaryFirst(displays: { id: number; workArea: Rect }[], primaryId: number): Rect[] {
+  return [...displays.filter((d) => d.id === primaryId), ...displays.filter((d) => d.id !== primaryId)].map((d) => d.workArea)
+}
+
+/** Where the mini-player opens: its saved spot when the whole window fits on a display, else bottom-right of the first work area (the primary display's, see `primaryFirst`). */
 export function miniPosition(saved: Point | null, workAreas: Rect[], size = MINI_SIZE): Point {
   const fits = (a: Rect) => saved && saved.x >= a.x && saved.y >= a.y && saved.x + size.width <= a.x + a.width && saved.y + size.height <= a.y + a.height
   if (saved && workAreas.some(fits)) return saved
@@ -92,7 +97,7 @@ export class WindowManager {
 
   toggleMini() {
     if (this.miniW) { this.miniW.win.close(); return }
-    const pos = miniPosition(this.o.settings.get().miniBounds, screen.getAllDisplays().map((d) => d.workArea))
+    const pos = miniPosition(this.o.settings.get().miniBounds, primaryFirst(screen.getAllDisplays(), screen.getPrimaryDisplay().id))
     const win = new BrowserWindow({
       ...MINI_SIZE, ...pos, frame: false, resizable: false, maximizable: false, minimizable: false, fullscreenable: false,
       alwaysOnTop: true, show: false, backgroundColor: '#100E12', title: 'Aurora mini-player', webPreferences: this.webPreferences(),
