@@ -2,6 +2,8 @@
 
 Aurora is licensed under the MIT License (see `LICENSE`). It uses the following third-party components, each under its own license.
 
+Installers include `THIRD_PARTY_LICENSES.txt` with the full license text of every bundled component (Settings → About → Third-party licenses). This file is a summary.
+
 ## Symphonia
 
 License: MPL-2.0
