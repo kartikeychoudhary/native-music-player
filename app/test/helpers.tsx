@@ -54,7 +54,7 @@ export function fakeApi(overrides: Partial<Record<keyof Methods, Handler>> = {})
     toggleMini: vi.fn().mockResolvedValue(undefined),
     showMain: vi.fn().mockResolvedValue(undefined),
     setViz: vi.fn(),
-    onSpectrum: vi.fn(() => () => {}),
+    onSpectrum: vi.fn((_cb: (bins: Uint8Array) => void) => () => {}),
     platform: 'linux',
   }
   const emit = (e: string, p: unknown) => act(() => { handlers.get(e)?.forEach((cb) => cb(p)) })
