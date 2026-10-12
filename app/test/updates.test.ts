@@ -93,6 +93,42 @@ describe('update controller', () => {
     await c.check()
     expect(states.at(-1)).toEqual({ status: 'error', message: 'offline' })
   })
+  it('an automatic check keeps a known "available" visible: it never publishes "checking", whether it fails or finds the same version', async () => {
+    let mode: 'same' | 'fail' = 'same'
+    const { c, states, timers } = setup({ mode: 'notify', latest: async () => { if (mode === 'fail') throw new Error('offline'); return '0.2.0' } })
+    await c.check()
+    states.length = 0
+    c.start()
+    timers[0].fn(); await new Promise((r) => setTimeout(r, 0))
+    mode = 'fail'
+    timers[0].fn(); await new Promise((r) => setTimeout(r, 0))
+    expect(states.map((s) => s.status)).not.toContain('checking')
+    expect(states.every((s) => s.status === 'available')).toBe(true)
+    expect(c.state).toEqual({ status: 'available', version: '0.2.0' })
+  })
+  it('an automatic check in auto mode that finds nothing leaves the state alone', async () => {
+    const { c, states, timers, updater } = setup({ mode: 'auto' })
+    updater.checkForUpdates.mockImplementation(async () => { updater.emit('update-not-available', {}); return null })
+    c.start(); timers[0].fn(); await new Promise((r) => setTimeout(r, 0))
+    expect(updater.checkForUpdates).toHaveBeenCalledTimes(1)
+    expect(states).toEqual([]); expect(c.state).toEqual({ status: 'idle' })
+    await c.check()
+    expect(states).toEqual([{ status: 'checking' }, { status: 'current' }])
+  })
+  it('a running automatic check blocks a manual one, and a running manual check blocks an automatic one', async () => {
+    const releases: (() => void)[] = []
+    const latest = vi.fn(() => new Promise<string | null>((r) => { releases.push(() => r(null)) }))
+    const { c, states, timers } = setup({ mode: 'notify', latest })
+    c.start(); timers[0].fn()                    // automatic, in flight
+    await c.check()                              // manual: skipped
+    expect(latest).toHaveBeenCalledTimes(1); expect(states).toEqual([])
+    releases[0](); await new Promise((r) => setTimeout(r, 0))
+    const manual = c.check()                     // manual, in flight
+    timers[0].fn()                               // automatic: skipped
+    expect(latest).toHaveBeenCalledTimes(2)
+    releases[1](); await manual
+    expect(states.map((s) => s.status)).toEqual(['current', 'checking', 'current'])
+  })
   it('auto mode downloads, reports progress, and waits for the user to install', async () => {
     const { c, states, updater, beforeInstall } = setup({ mode: 'auto' })
     await c.check()
@@ -117,11 +153,26 @@ describe('update controller', () => {
     timers[0].fn()
     expect(quit).toHaveBeenCalledTimes(1)
   })
+  it('still schedules the quit fallback, and does not throw, when quitAndInstall throws', async () => {
+    const { c, updater, timers, quit } = setup({ mode: 'auto' })
+    await c.check()
+    updater.emit('update-downloaded', { version: '0.2.0' })
+    updater.quitAndInstall.mockImplementation(() => { throw new Error('install step failed') })
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await expect(c.install()).resolves.toBeUndefined()
+      expect(log).toHaveBeenCalled()
+    } finally { log.mockRestore() }
+    expect(timers.map((t) => [t.ms, t.repeat])).toEqual([[QUIT_FALLBACK_MS, false]])
+    expect(quit).not.toHaveBeenCalled()
+    timers[0].fn()
+    expect(quit).toHaveBeenCalledTimes(1)
+  })
   it('a failed automatic download goes back to what was known, without an error or banner state', async () => {
     const { c, states, updater, timers } = setup({ mode: 'auto' })
     updater.checkForUpdates.mockImplementation(async () => { updater.emit('update-available', { version: '0.2.0' }); updater.emit('error', new Error('offline')); return null })
     c.start(); timers[0].fn(); await new Promise((r) => setTimeout(r, 0))
-    expect(states.map((s) => s.status)).toEqual(['checking', 'downloading', 'idle'])
+    expect(states.map((s) => s.status)).toEqual(['downloading', 'idle'])
     expect(c.state).toEqual({ status: 'idle' })
   })
   it('a rejected download promise does not escape as an unhandled rejection', async () => {

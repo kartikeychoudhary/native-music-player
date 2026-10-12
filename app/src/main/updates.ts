@@ -76,6 +76,8 @@ export function createUpdateController(d: ControllerDeps) {
   let state: UpdateState = { status: 'idle' }
   let before: UpdateState = state
   let manual = false
+  /** A check is running. Automatic checks do not publish `checking` (it would hide a known `available`), so `state` cannot tell. */
+  let inFlight = false
   let au: AutoUpdaterLike | null = null
   const set = (s: UpdateState) => { state = s; d.onState(s) }
   const fail = (e: unknown) => {
@@ -90,16 +92,18 @@ export function createUpdateController(d: ControllerDeps) {
     au.on('update-available', (i: { version: string }) => set({ status: 'downloading', version: i.version, percent: 0 }))
     au.on('download-progress', (p: { percent: number }) => { if (state.status === 'downloading') set({ ...state, percent: Math.round(p.percent) }) })
     au.on('update-downloaded', (i: { version: string }) => set({ status: 'ready', version: i.version }))
+    // Only a manual check is at `checking`; an automatic one finding nothing leaves what was known alone.
     au.on('update-not-available', () => { if (state.status === 'checking') set({ status: 'current' }) })
     au.on('error', (e: unknown) => fail(e))
     return au
   }
   async function check(isManual: boolean) {
-    if (d.mode === 'off' || ['checking', 'downloading', 'ready'].includes(state.status)) return
+    if (d.mode === 'off' || inFlight || ['checking', 'downloading', 'ready'].includes(state.status)) return
     if (!isManual && !d.enabled()) return
+    inFlight = true
     manual = isManual
     before = state
-    set({ status: 'checking' })
+    if (isManual) set({ status: 'checking' })
     try {
       if (d.mode === 'auto') {
         const r = (await updater().checkForUpdates()) as { downloadPromise?: Promise<unknown> } | null
@@ -111,7 +115,7 @@ export function createUpdateController(d: ControllerDeps) {
         const v = await d.latestVersion()
         set(v && isNewer(v, d.currentVersion) ? { status: 'available', version: v } : { status: 'current' })
       }
-    } catch (e) { fail(e) }
+    } catch (e) { fail(e) } finally { inFlight = false }
   }
   return {
     get state() { return state },
@@ -124,9 +128,15 @@ export function createUpdateController(d: ControllerDeps) {
     async install() {
       if (state.status !== 'ready' || !au) return
       await d.beforeInstall()
-      au.quitAndInstall(true, true)
-      // quitAndInstall returns without quitting when its install step fails; the engine is already stopped, so quit cleanly.
-      d.setTimer(() => d.quit(), QUIT_FALLBACK_MS)
+      try {
+        au.quitAndInstall(true, true)
+      } catch (e) {
+        // The fallback below quits the app, so there is nothing for the caller to handle.
+        console.error('quitAndInstall failed:', e)
+      } finally {
+        // quitAndInstall returns without quitting when its install step fails (or throws); the engine is already stopped, so quit cleanly.
+        d.setTimer(() => d.quit(), QUIT_FALLBACK_MS)
+      }
     },
   }
 }
