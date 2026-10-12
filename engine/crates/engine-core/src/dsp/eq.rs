@@ -64,6 +64,9 @@ pub struct EqState { channels: usize, z: [[[f64; 2]; 10]; MAX_CHANNELS] }
 impl EqState {
     pub fn new(channels: usize) -> Self { EqState { channels: channels.clamp(1, MAX_CHANNELS), z: [[[0.0; 2]; 10]; MAX_CHANNELS] } }
 
+    /// Zeroes the filter memory (e.g. when the EQ is switched back on, so stale state doesn't click). Realtime-safe.
+    pub fn reset(&mut self) { self.z = [[[0.0; 2]; 10]; MAX_CHANNELS]; }
+
     fn run(&mut self, d: &EqDesign, ch: usize, x: f64) -> f64 {
         let mut y = x * d.gain;
         for (i, b) in d.stages.iter().enumerate() {

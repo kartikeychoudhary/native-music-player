@@ -104,11 +104,14 @@ impl RingSource {
     }
 
     /// Applies the current EQ to `buf`. A changed setting is picked up here: the design is rebuilt
-    /// for this stream's rate (no allocation) and the filter memory is kept, so changes are smooth.
+    /// for this stream's rate (no allocation) and the filter memory is kept, so changes are smooth
+    /// (it is reset only when the EQ switches from off to on).
     fn eq_step(&mut self, buf: &mut [u8]) {
         let Some(eq) = &self.eq else { return };
         if eq.seq() != self.eq_seq && let Some(s) = eq.read() {
             self.eq_seq = s.seq;
+            // Off -> on: the memory is from before the EQ was bypassed, so start clean rather than click.
+            if s.enabled && !self.eq_on { self.eq_state.reset(); }
             self.eq_on = s.enabled;
             self.eq_design = EqDesign::new(self.rate, &s.bands, s.preamp);
         }
@@ -364,6 +367,36 @@ mod tests {
         eq.publish(false, &[0.0; 10], -12.0);
         s.fill(&mut out);
         assert!(i16s(&out).iter().all(|&v| v == 10_000), "disabled again");
+    }
+
+    #[test]
+    fn re_enabling_the_eq_starts_from_clean_filter_memory() {
+        use crate::dsp::eq::{EqDesign, EqShared, EqState};
+        let mut bands = [0.0f32; 10];
+        bands[4] = 9.0;
+        bands[5] = -7.0;
+        let eq = Arc::new(EqShared::new());
+        let (mut p, mut s, sh) = ring_pair(1 << 16, fmt());
+        s.attach_eq(eq.clone());
+        sh.playing.store(true, Relaxed);
+        sh.apply_eq.store(true, Relaxed);
+        let wave = |phase: usize, frames: usize| -> Vec<u8> {
+            (0..frames).flat_map(|i| { let v = (((i + phase) % 37) as i16 - 18) * 700; [v, v / 2] }).flat_map(i16::to_le_bytes).collect()
+        };
+        let mut out = vec![0u8; 256 * 4];
+        eq.publish(true, &bands, -3.0);
+        push(&mut p, &wave(0, 256));
+        s.fill(&mut out); // leaves filter memory behind
+        eq.publish(false, &bands, -3.0);
+        push(&mut p, &wave(11, 256));
+        s.fill(&mut out); // bypassed: the memory is not advanced
+        eq.publish(true, &bands, -3.0);
+        let input = wave(23, 256);
+        push(&mut p, &input);
+        s.fill(&mut out);
+        let mut fresh = input.clone();
+        EqState::new(2).process(&EqDesign::new(48_000, &bands, -3.0), &mut fresh, DeviceSample::I16);
+        assert_eq!(&i16s(&out)[..8], &i16s(&fresh)[..8], "the first frames after re-enabling match a fresh filter");
     }
 
     #[test]
