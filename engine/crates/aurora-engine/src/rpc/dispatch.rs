@@ -4,12 +4,13 @@ use std::sync::{Arc, Mutex};
 use engine_core::output::OutputBackend;
 use engine_core::player::{Command, NewEntry, PlayerHandle};
 use protocol::rpc::*;
-use protocol::{ErrorCode, QueueChanged, ReplayGainInfo, TrackRow};
+use protocol::{CrossfadeParams, EnabledParams, ErrorCode, QueueChanged, ReplayGainInfo, ReplayGainParams, SetEqParams, TrackRow};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
 use super::library_methods::{self, lib_err, unavailable};
 use super::library_service::LibraryService;
+use super::writer::Writer;
 
 pub struct Ctx {
     pub player: PlayerHandle,
@@ -18,6 +19,8 @@ pub struct Ctx {
     pub library: Option<Arc<LibraryService>>,
     /// Why the library failed to open when `--data-dir` was given (`library` is then `None`).
     pub library_error: Option<String>,
+    pub dsp: Mutex<super::dsp::DspStore>,
+    pub out: Arc<Writer>,
 }
 
 pub enum Outcome { Reply(Value), Shutdown }
@@ -69,6 +72,23 @@ pub fn enrich(svc: &LibraryService, items: &mut [NewEntry]) {
 
 fn queue_len(ctx: &Ctx) -> usize { ctx.queue.lock().unwrap_or_else(|p| p.into_inner()).items.len() }
 
+/// Applies a DSP change. On success:
+/// - the player gets the settings that changed, and only those: a ReplayGain change resyncs the
+///   audible track, so it mustn't be resent for an EQ change;
+/// - every window gets `dsp.changed`;
+/// - the caller gets the new state.
+fn dsp_change(ctx: &Ctx, change: impl FnOnce(&mut super::dsp::DspStore) -> Result<(), String>) -> Result<Outcome, RpcError> {
+    let mut d = ctx.dsp.lock().unwrap_or_else(|p| p.into_inner());
+    let before = d.state().clone();
+    change(&mut d).map_err(|m| err(ErrorCode::InvalidArgument.code(), m))?;
+    let after = d.state();
+    if after.eq != before.eq { ctx.player.send(Command::SetEq(after.eq.clone())); }
+    if after.crossfade_secs != before.crossfade_secs { ctx.player.send(Command::SetCrossfade(after.crossfade_secs)); }
+    if after.replay_gain != before.replay_gain { ctx.player.send(Command::SetReplayGain(after.replay_gain)); }
+    ctx.out.notify("dsp.changed", after);
+    Ok(Outcome::Reply(serde_json::to_value(after).unwrap()))
+}
+
 pub fn dispatch(ctx: &Ctx, method: &str, p: Value) -> Result<Outcome, RpcError> {
     let ok = |c: Command| -> Result<Outcome, RpcError> { ctx.player.send(c); Ok(Outcome::Reply(Value::Null)) };
     let invalid = |m: &str| err(ErrorCode::InvalidArgument.code(), m);
@@ -114,6 +134,22 @@ pub fn dispatch(ctx: &Ctx, method: &str, p: Value) -> Result<Outcome, RpcError> 
         "queue.setRepeat" => { let p: RepeatParams = params(p)?; ok(Command::SetRepeat(p.repeat)) }
         "queue.get" => Ok(Outcome::Reply(serde_json::to_value(&*ctx.queue.lock().unwrap_or_else(|p| p.into_inner())).unwrap())),
         "devices.list" => ctx.backend.devices().map(|d| Outcome::Reply(serde_json::to_value(d).unwrap())).map_err(|e| err(e.code().code(), e.to_string())),
+        "dsp.get" => Ok(Outcome::Reply(serde_json::to_value(ctx.dsp.lock().unwrap_or_else(|p| p.into_inner()).state()).unwrap())),
+        "dsp.presets" => Ok(Outcome::Reply(serde_json::to_value(ctx.dsp.lock().unwrap_or_else(|p| p.into_inner()).presets()).unwrap())),
+        "dsp.setEq" => { let p: SetEqParams = params(p)?; dsp_change(ctx, |d| d.set_eq(p)) }
+        "dsp.setEqEnabled" => { let p: EnabledParams = params(p)?; dsp_change(ctx, |d| d.set_eq_enabled(p.enabled)) }
+        "dsp.setCrossfade" => { let p: CrossfadeParams = params(p)?; dsp_change(ctx, |d| d.set_crossfade(p.seconds)) }
+        "dsp.setReplayGain" => { let p: ReplayGainParams = params(p)?; dsp_change(ctx, |d| d.set_replay_gain(p.mode)) }
+        "dsp.deletePreset" => { let p: NameParams = params(p)?; dsp_change(ctx, |d| d.delete_preset(&p.name)) }
+        "dsp.savePreset" => {
+            let p: NameParams = params(p)?;
+            let mut d = ctx.dsp.lock().unwrap_or_else(|p| p.into_inner());
+            let preset = d.save_preset(&p.name).map_err(|m| err(ErrorCode::InvalidArgument.code(), m))?;
+            // The values are unchanged; this only updates the EQ stage to show the new preset name.
+            ctx.player.send(Command::SetEq(d.state().eq.clone()));
+            ctx.out.notify("dsp.changed", d.state());
+            Ok(Outcome::Reply(serde_json::to_value(preset).unwrap()))
+        }
         "engine.shutdown" => Ok(Outcome::Shutdown),
         other => match library_methods::dispatch(ctx.library.as_deref(), ctx.library_error.as_deref(), other, p) {
             Some(r) => r.map(Outcome::Reply),

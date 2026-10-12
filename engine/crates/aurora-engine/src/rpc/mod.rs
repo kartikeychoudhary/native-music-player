@@ -1,4 +1,5 @@
 mod dispatch;
+mod dsp;
 mod library_methods;
 mod library_service;
 mod session;
@@ -101,6 +102,8 @@ pub fn run(opts: RunOptions) -> i32 {
         },
         None => (None, None),
     };
+    let dsp_store = dsp::DspStore::load(opts.data_dir.as_deref());
+    for c in dsp_store.commands() { player.send(c); }
     // The library opens first so a restored queue can pick up album order and ReplayGain from it.
     if let Some(dir) = &opts.data_dir && let Some(r) = session::load(dir).and_then(|s| session::restore(s, |items| if let Some(svc) = &library { dispatch::enrich(svc, items) })) {
         player.send(Command::Restore(Box::new(r)));
@@ -159,7 +162,7 @@ pub fn run(opts: RunOptions) -> i32 {
         }).expect("spawn session saver")
     });
 
-    let ctx = Ctx { player, backend, queue, library: library.clone(), library_error: library_error.map(|e| e.to_string()) };
+    let ctx = Ctx { player, backend, queue, library: library.clone(), library_error: library_error.map(|e| e.to_string()), dsp: Mutex::new(dsp_store), out: out.clone() };
     let mut stdin = std::io::stdin().lock();
     let mut buf = Vec::new();
     loop {
