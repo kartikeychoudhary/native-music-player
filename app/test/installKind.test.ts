@@ -1,4 +1,7 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { APP_ID } from '../src/main/appIdentity'
 import { installKind } from '../src/main/installKind'
 
 const base = { isPackaged: true, env: {}, exists: () => false }
@@ -18,5 +21,10 @@ describe('install kind', () => {
   })
   it('is mac on macOS', () => {
     expect(installKind({ ...base, platform: 'darwin', execPath: '/Applications/Aurora.app/Contents/MacOS/Aurora' })).toBe('mac')
+  })
+  it('matches electron-builder.yml', () => {
+    const yml = readFileSync(join(__dirname, '../electron-builder.yml'), 'utf8')
+    expect(yml).toContain(`appId: ${APP_ID}`)
+    expect(yml).toMatch(/owner: kartikeychoudhary\s+repo: native-music-player/)
   })
 })

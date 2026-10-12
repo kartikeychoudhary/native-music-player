@@ -6,6 +6,7 @@
     "engine:test": "cargo test --manifest-path engine/Cargo.toml --workspace",
     "dev": "npm run engine:build && npm --prefix app run dev",
     "test": "npm run engine:test && npm --prefix app test",
-    "e2e": "npm run engine:build && npm --prefix app run e2e"
+    "e2e": "npm run engine:build && npm --prefix app run e2e",
+    "package": "node app/build-tools/dist-local.ts"
   }
 }

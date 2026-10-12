@@ -21,9 +21,14 @@ npm run fixtures           # generate audio fixtures into fixtures/out (needs ff
 npm run dev                # build the engine, then start the Electron app in dev mode
 npm test                   # engine tests (cargo) and app unit tests (vitest)
 npm run e2e                # build the engine and the app, then run the Electron smoke tests
+npm run package            # release engine + Windows/macOS/Linux package for this machine, in app/dist
 ```
 
 The end-to-end tests drive the real app against the real engine with a silent `null` output (`AURORA_OUTPUT=null`) and a throwaway data directory, so they need no audio device and never touch your library. They expect the fixtures from `npm run fixtures`.
+
+### Packaging locally
+
+`npm run package` builds the release engine, stages it into the app and runs electron-builder for this machine's OS and architecture, without publishing or signing. `app/dist/<os>-unpacked` is the unpacked app; `AURORA_PACKAGED_EXE=<path to its executable> npm --prefix app run e2e:packaged` smoke-tests it.
 
 ## Library
 

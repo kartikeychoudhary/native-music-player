@@ -10,6 +10,8 @@ app/out/
 app/dist/
 app/release/
 app/build/generated/
+app/resources/engine/
+app/dist-nofdk/
 
 # Generated test fixtures
 fixtures/out/

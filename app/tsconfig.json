@@ -13,5 +13,5 @@
     "baseUrl": ".",
     "paths": { "@shared/*": ["src/shared/*"], "@protocol/*": ["../shared/protocol/*"] }
   },
-  "include": ["src", "test", "e2e", "build-tools", "../shared/protocol", "*.config.ts"]
+  "include": ["src", "test", "e2e", "e2e-packaged", "build-tools", "../shared/protocol", "*.config.ts"]
 }
