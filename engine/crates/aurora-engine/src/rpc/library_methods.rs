@@ -1,9 +1,9 @@
-//! `library.*` and `playlists.*` (spec §4.3).
+//! `library.*`, `playlists.*` and `lyrics.get` (spec §4.3).
 use std::path::Path;
 
 use library::LibError;
 use protocol::rpc::*;
-use protocol::{ErrorCode, GaplessSummary, LibraryScope, ListQuery, TrackDetail};
+use protocol::{ErrorCode, GaplessSummary, LibraryScope, ListQuery, LyricsParams, TrackDetail};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -36,10 +36,10 @@ fn with_gapless(mut d: TrackDetail) -> TrackDetail {
     d
 }
 
-/// Handles `library.*` and `playlists.*`; `None` for any other method. Without a library they fail
+/// Handles `library.*`, `playlists.*` and `lyrics.get`; `None` for any other method. Without a library they fail
 /// with `unavailable(open_error)`.
 pub fn dispatch(svc: Option<&LibraryService>, open_error: Option<&str>, method: &str, p: Value) -> Option<Result<Value, RpcError>> {
-    if !(method.starts_with("library.") || method.starts_with("playlists.")) { return None; }
+    if !(method.starts_with("library.") || method.starts_with("playlists.") || method == "lyrics.get") { return None; }
     Some(match svc { Some(svc) => handle(svc, method, p), None => Err(unavailable(open_error)) })
 }
 
@@ -64,6 +64,7 @@ fn handle(svc: &LibraryService, method: &str, p: Value) -> Result<Value, RpcErro
         "library.track" => { let p: IdParams = params(p)?; reply(lib.track(p.id).map(with_gapless)) }
         "library.search" => { let p: SearchParams = params(p)?; reply(lib.search(&p.text, p.limit.unwrap_or(20))) }
         "library.artwork" => { let p: ArtworkParams = params(p)?; reply(lib.artwork_info(p.id, p.size)) }
+        "lyrics.get" => { let p: LyricsParams = params(p)?; reply(lib.lyrics(p.track_id)) }
         "library.recent" => { let p: RecentParams = params(p)?; reply(lib.recent(p.kind, p.limit.unwrap_or(20))) }
         "playlists.list" => reply(lib.playlists()),
         "playlists.get" => { let p: IdParams = params(p)?; reply(lib.playlist(p.id)) }

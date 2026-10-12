@@ -280,3 +280,19 @@ fn removing_a_folder_during_its_scan_ends_the_scan_promptly_and_quietly() {
     let errors: Vec<&Value> = e.all.iter().filter(|v| v["method"] == "engine.error").collect();
     assert!(errors.is_empty(), "no engine.error expected: {errors:?}");
 }
+
+#[test]
+fn lyrics_come_from_the_library() {
+    let data = tempfile::tempdir().unwrap();
+    let music = music_dir(&["flac16_44k.flac"]);
+    std::fs::write(music.path().join("flac16_44k.lrc"), "[00:00.50]Hello\n[00:01.50]World").unwrap();
+    let mut e = with_library(data.path());
+    e.ok("library.addFolder", json!({ "path": music.path() }));
+    wait_scan_done(&mut e);
+    let id = e.ok("library.tracks", json!({}))["items"][0]["id"].clone();
+    let l = e.ok("lyrics.get", json!({ "trackId": id }));
+    assert_eq!(l, json!({ "synced": true, "lines": [{ "tMs": 500, "text": "Hello" }, { "tMs": 1500, "text": "World" }] }));
+    assert_eq!(e.call("lyrics.get", json!({ "trackId": 999_999 }))["error"]["code"], -32001);
+    let mut bare = Engine::spawn();
+    assert_eq!(bare.call("lyrics.get", json!({ "trackId": 1 }))["error"]["code"], -32008);
+}

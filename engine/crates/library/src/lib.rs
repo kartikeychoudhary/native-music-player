@@ -4,6 +4,7 @@ pub mod codec;
 pub mod db;
 pub mod error;
 pub mod history;
+pub mod lyrics;
 pub mod palette;
 pub mod playlists;
 pub mod query;
