@@ -18,7 +18,30 @@ export function createVizHub(opts: { call: (method: 'viz.subscribe' | 'viz.unsub
     engineReady() { engineOn = false; sync() },
     frame(type: number, data: Uint8Array) {
       if (type !== FRAME_SPECTRUM) return
-      for (const id of subs) opts.send(id, data)
+      // A window that can't take the frame is gone (or reloading): stop feeding it. Deleting during Set iteration is safe.
+      for (const id of subs) if (!opts.send(id, data)) { subs.delete(id); sync() }
     },
   }
+}
+
+/** The slice of webContents that hookSender needs. */
+export interface SenderLike {
+  id: number
+  on(event: string, listener: (...args: any[]) => void): unknown
+  once(event: string, listener: (...args: any[]) => void): unknown
+}
+
+/**
+ * Ties a window's subscription to its webContents' lifetime, once per sender: the subscription ends when the
+ * window is destroyed, its renderer dies, or its main frame navigates/reloads (the page re-subscribes on mount).
+ */
+export function hookSender(wc: SenderLike, hub: { drop(windowId: number): void }, hooked: Set<number>) {
+  const id = wc.id
+  if (hooked.has(id)) return
+  hooked.add(id)
+  wc.once('destroyed', () => { hooked.delete(id); hub.drop(id) })
+  wc.on('render-process-gone', () => hub.drop(id))
+  wc.on('did-start-navigation', (details: { isMainFrame: boolean; isSameDocument: boolean }) => {
+    if (details.isMainFrame && !details.isSameDocument) hub.drop(id)
+  })
 }

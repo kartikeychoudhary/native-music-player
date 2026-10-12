@@ -13,7 +13,7 @@ import { logDir, logger } from './logs'
 import { shouldBlockNavigation } from './navigation'
 import { safeSend } from './safeSend'
 import { boundsVisible, SettingsStore } from './settings'
-import { createVizHub } from './viz'
+import { createVizHub, hookSender } from './viz'
 
 protocol.registerSchemesAsPrivileged([{ scheme: ART_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }])
 
@@ -41,8 +41,12 @@ const supervisor = new EngineSupervisor(() => spawn(binary(), engineArgs(dataDir
 // Spectrum subscriptions are refcounted across windows; the engine only has one on/off switch.
 const viz = createVizHub({
   call: (method) => supervisor.call(method, {}),
-  send: (id, data) => { const wc = webContents.fromId(id); if (!wc || wc.isDestroyed()) return false; wc.send('aurora:spectrum', data); return true },
+  send: (id, data) => {
+    const wc = webContents.fromId(id)
+    return wc ? safeSend({ isDestroyed: () => wc.isDestroyed(), webContents: wc }, 'aurora:spectrum', data) : false
+  },
 })
+const hookedSenders = new Set<number>()
 
 // Holds library notices (sent once, right after the engine starts) until the page has loaded.
 const relay = createEventRelay((event, payload) => safeSend(win, 'aurora:event', event, payload))
@@ -148,7 +152,7 @@ app.whenReady().then(() => {
   ipcMain.on('aurora:viz', (e, on: unknown) => {
     const id = e.sender.id
     viz.set(id, on === true)
-    e.sender.once('destroyed', () => viz.drop(id))
+    hookSender(e.sender, viz, hookedSenders)
   })
   ipcMain.handle('aurora:openLogs', async () => { await shell.openPath(logDir()) })
 
