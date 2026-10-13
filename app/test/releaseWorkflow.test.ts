@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
@@ -53,5 +53,35 @@ describe('release workflow', () => {
       expect(s.env!.AURORA_PACKAGED_EXE).toBe('${{ matrix.exe_nofdk }}')
     }
     expect(smokes.some((s) => s.run!.startsWith('xvfb-run -a '))).toBe(true)
+  })
+  it('signs Windows through SignPath only when configured, with the binaries then the installer', () => {
+    const steps = wf.jobs.package.steps
+    const signpath = steps.filter((s) => s.uses?.startsWith('signpath/github-action-submit-signing-request@'))
+    expect(signpath.map((s) => s.with!['artifact-configuration-slug'])).toEqual(['binaries', 'installer'])
+    for (const s of signpath) {
+      expect((s as { if?: string }).if).toContain("vars.SIGNPATH_ORGANIZATION_ID != ''")
+      expect(s.with!['signing-policy-slug']).toBe("${{ github.event_name == 'push' && 'release-signing' || 'test-signing' }}")
+      expect(s.with!['api-token']).toBe('${{ secrets.SIGNPATH_API_TOKEN }}')
+      expect(s.with!['wait-for-completion']).toBe(true)
+    }
+    const unsigned = steps.find((s) => s.name === 'Package')! as { if?: string }
+    expect(unsigned.if).toContain("vars.SIGNPATH_ORGANIZATION_ID == ''")
+  })
+  it('finalizes latest.yml after the installer is signed and checks the publisher on release builds', () => {
+    const runs = wf.jobs.package.steps.map((s) => s.run ?? '').join('\n')
+    expect(runs).toContain('finalize-windows.ts')
+    expect(runs).toMatch(/check-signatures\.ps1[^\n]*-Publisher 'SignPath Foundation'/)
+    const order = (needle: string) => wf.jobs.package.steps.findIndex((s) => (s.run ?? '').includes(needle) || JSON.stringify(s.with ?? {}).includes(needle))
+    expect(order('--sign-mode collect')).toBeLessThan(order('binaries'))
+    expect(order('binaries')).toBeLessThan(order('--sign-mode apply'))
+    expect(order('--sign-mode apply')).toBeLessThan(order('"installer"'))
+    expect(order('"installer"')).toBeLessThan(order('finalize-windows.ts'))
+  })
+  it('keeps the artifact configurations next to the workflow', () => {
+    for (const slug of ['binaries', 'installer']) expect(existsSync(join(__dirname, `../../.signpath/artifact-configurations/${slug}.xml`))).toBe(true)
+  })
+  it('signs Windows with SignPath only; the Package step carries no Windows certificate secrets', () => {
+    const pkg = wf.jobs.package.steps.find((s) => s.name === 'Package')!
+    expect(JSON.stringify(pkg.env)).not.toContain('WIN_CSC')
   })
 })

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SignPath artifact configuration "binaries": the GitHub artifact is a zip of sign/to-sign/, every
+     file named <hash>-<name>. Sign every executable and DLL in it (Aurora.exe, Electron's DLLs,
+     aurora-engine.exe, the uninstaller). See docs/SIGNING.md. -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file-set>
+      <include path="*.exe" min-matches="1" max-matches="unbounded" />
+      <include path="*.dll" min-matches="1" max-matches="unbounded" />
+      <for-each>
+        <authenticode-sign />
+      </for-each>
+    </pe-file-set>
+  </zip-file>
+</artifact-configuration>

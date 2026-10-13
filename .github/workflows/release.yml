@@ -126,16 +126,77 @@ jobs:
           done
       - run: cargo fetch --locked --manifest-path engine/Cargo.toml
       - run: npm ci --prefix app
+      # Windows is signed by SignPath (the steps below) when SIGNPATH_ORGANIZATION_ID is set; otherwise it
+      # is packaged unsigned here. macOS and Linux always package here.
       - name: Package
+        if: matrix.os != 'windows' || vars.SIGNPATH_ORGANIZATION_ID == ''
         env:
-          CSC_LINK: ${{ matrix.os == 'windows' && secrets.WIN_CSC_LINK || matrix.os == 'macos' && secrets.MAC_CSC_LINK || '' }}
-          CSC_KEY_PASSWORD: ${{ matrix.os == 'windows' && secrets.WIN_CSC_KEY_PASSWORD || matrix.os == 'macos' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
+          CSC_LINK: ${{ matrix.os == 'macos' && secrets.MAC_CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ matrix.os == 'macos' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           if [ -n "$CSC_LINK" ]; then signed=--signed; else signed=; export CSC_IDENTITY_AUTO_DISCOVERY=false; fi
           node app/build-tools/package-ci.ts --platform ${{ matrix.platform }} $signed
+      # Windows signing through SignPath, in two packaging passes (docs/SIGNING.md): collect the files
+      # to sign, sign them, build again with the signed copies swapped in, then sign the installer.
+      - name: Collect Windows binaries for signing
+        if: matrix.os == 'windows' && vars.SIGNPATH_ORGANIZATION_ID != ''
+        run: node app/build-tools/package-ci.ts --platform win32 --sign-mode collect --sign-dir sign
+      - id: unsigned-binaries
+        if: matrix.os == 'windows' && vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: actions/upload-artifact@v4
+        with: { name: windows-binaries-unsigned, path: sign/to-sign/, if-no-files-found: error }
+      - name: Sign the binaries (SignPath)
+        if: matrix.os == 'windows' && vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
+          organization-id: '${{ vars.SIGNPATH_ORGANIZATION_ID }}'
+          project-slug: '${{ vars.SIGNPATH_PROJECT_SLUG }}'
+          signing-policy-slug: "${{ github.event_name == 'push' && 'release-signing' || 'test-signing' }}"
+          artifact-configuration-slug: binaries
+          github-artifact-id: '${{ steps.unsigned-binaries.outputs.artifact-id }}'
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 7200 # release signing waits for a human approval
+          output-artifact-directory: sign/signed
+      - name: Package with the signed binaries
+        if: matrix.os == 'windows' && vars.SIGNPATH_ORGANIZATION_ID != ''
+        run: node app/build-tools/package-ci.ts --platform win32 --sign-mode apply --sign-dir sign
+      - name: Check every app binary is signed
+        if: matrix.os == 'windows' && vars.SIGNPATH_ORGANIZATION_ID != ''
+        shell: pwsh
+        run: app/build-tools/check-signatures.ps1 -Path app/dist/win-unpacked,app/dist/win-arm64-unpacked,app/dist-nofdk/win-unpacked,app/dist-nofdk/win-arm64-unpacked
+      - id: unsigned-installer
+        if: matrix.os == 'windows' && vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: actions/upload-artifact@v4
+        with: { name: windows-installer-unsigned, path: 'app/dist/*-win-setup.exe', if-no-files-found: error }
+      - name: Sign the installer (SignPath)
+        if: matrix.os == 'windows' && vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
+          organization-id: '${{ vars.SIGNPATH_ORGANIZATION_ID }}'
+          project-slug: '${{ vars.SIGNPATH_PROJECT_SLUG }}'
+          signing-policy-slug: "${{ github.event_name == 'push' && 'release-signing' || 'test-signing' }}"
+          artifact-configuration-slug: installer
+          github-artifact-id: '${{ steps.unsigned-installer.outputs.artifact-id }}'
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 7200 # release signing waits for a human approval
+          output-artifact-directory: sign/installer
+      - name: Use the signed installer and refresh latest.yml
+        if: matrix.os == 'windows' && vars.SIGNPATH_ORGANIZATION_ID != ''
+        run: |
+          cp sign/installer/*-win-setup.exe app/dist/
+          node app/build-tools/finalize-windows.ts --dist app/dist
+      - name: Check the installer signature
+        if: matrix.os == 'windows' && vars.SIGNPATH_ORGANIZATION_ID != ''
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem app/dist/*-win-setup.exe | ForEach-Object FullName
+          if ('${{ github.event_name }}' -eq 'push') { app/build-tools/check-signatures.ps1 -Path $files -Publisher 'SignPath Foundation' }
+          else { app/build-tools/check-signatures.ps1 -Path $files }
       - name: Smoke test the packaged app (Linux)
         if: matrix.os == 'linux'
         env: { AURORA_PACKAGED_EXE: '${{ matrix.exe }}' }
