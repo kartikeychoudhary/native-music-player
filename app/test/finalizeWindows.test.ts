@@ -30,4 +30,8 @@ describe('finalize windows', () => {
   it('refuses a file latest.yml does not list', () => {
     expect(() => updateLatestYml(latest, { 'Other.exe': { sha512: 'N==', size: 1 } })).toThrow(/Other\.exe/)
   })
+  it('refuses to finish when the installer named by path is not among the files', () => {
+    const two = latest.replace('path: Aurora', '  - url: Aurora-0.1.0-win-x64.zip\n    sha512: ZIP==\n    size: 5\npath: Aurora')
+    expect(() => updateLatestYml(two, { 'Aurora-0.1.0-win-x64.zip': { sha512: 'N==', size: 1 } })).toThrow(/Aurora-0\.1\.0-win-setup\.exe/)
+  })
 })

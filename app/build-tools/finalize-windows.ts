@@ -32,11 +32,12 @@ export function updateLatestYml(text: string, infos: Record<string, FileInfo>): 
     setScalar(entry, 'size', info.size)
     if (info.blockMapSize !== undefined && entry.has('blockMapSize')) setScalar(entry, 'blockMapSize', info.blockMapSize)
   }
-  const top = infos[String(doc.get('path'))]
-  if (top) {
-    doc.set('sha512', top.sha512)
-    if (top.blockMapSize !== undefined && doc.has('blockMapSize')) doc.set('blockMapSize', top.blockMapSize)
-  }
+  // The top-level path is the installer electron-updater downloads. Leaving its sha512 stale breaks every update.
+  const path = String(doc.get('path'))
+  const top = infos[path]
+  if (!top) throw new Error(`latest.yml path ${path} is not among the files to update`)
+  doc.set('sha512', top.sha512)
+  if (top.blockMapSize !== undefined && doc.has('blockMapSize')) doc.set('blockMapSize', top.blockMapSize)
   return String(doc)
 }
 
@@ -50,7 +51,8 @@ function sha512Of(file: string): Promise<string> {
 async function finalize(dist: string): Promise<void> {
   const ymlPath = join(dist, 'latest.yml')
   const text = readFileSync(ymlPath, 'utf8')
-  const files = parseDocument(text).get('files')
+  const ymlDoc = parseDocument(text)
+  const files = ymlDoc.get('files')
   if (!isSeq(files)) throw new Error('latest.yml has no files list')
   // electron-builder 26 ships buildBlockMap as CommonJS inside app-builder-lib; it is not part of a public entry point.
   const { buildBlockMap } = createRequire(import.meta.url)('app-builder-lib/out/targets/blockmap/blockmap') as {
@@ -71,7 +73,8 @@ async function finalize(dist: string): Promise<void> {
     infos[url] = info
     console.log(`${url}: sha512 ${old.slice(0, 12)} -> ${info.sha512.slice(0, 12)}${existsSync(`${file}.blockmap`) ? ' (blockmap rebuilt)' : ''}`)
   }
-  if (Object.keys(infos).length === 0) throw new Error(`no file listed in latest.yml exists in ${dist}`)
+  const installer = String(ymlDoc.get('path'))
+  if (!infos[installer]) throw new Error(`the installer ${installer} named by latest.yml is not in ${dist}; was it renamed by signing?`)
   writeFileSync(ymlPath, updateLatestYml(text, infos))
   console.log(`rewrote ${ymlPath}`)
 }
