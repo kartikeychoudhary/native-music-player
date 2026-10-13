@@ -10,7 +10,8 @@ test('player bar controls never overlap, from the minimum window width up', asyn
     await win.getByRole('button', { name: /open files/i }).click()
     await expect(win.getByRole('button', { name: 'Pause' })).toBeVisible()
     for (const width of [940, 1100, 1280, 1600]) {
-      await app.evaluate(({ BrowserWindow }, w) => BrowserWindow.getAllWindows()[0].setSize(w, 800), width)
+      // Viewport emulation gives an exact CSS width; resizing the window depends on frame and display scaling.
+      await win.setViewportSize({ width, height: 800 })
       await expect.poll(() => win.evaluate(() => innerWidth)).toBe(width)
       const bar = await win.evaluate(() => {
         const box = (el: Element) => el.getBoundingClientRect()

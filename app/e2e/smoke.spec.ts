@@ -5,6 +5,8 @@ import { launchAurora, root, tempDir } from './fixture'
 test('open → play → signal path → bit-perfect', async () => {
   const { app, win } = await launchAurora({ dataDir: tempDir('aurora-data-'), openFiles: resolve(root, 'fixtures/out/flac24_96k.flac') })
   try {
+    // Wide enough that the bar shows its format badges (narrow bars hide them; CI windows are small).
+    await win.setViewportSize({ width: 1600, height: 900 })
     await win.getByRole('button', { name: /open files/i }).click()
     await expect(win.getByTestId('now-title')).toHaveText('flac24_96k')
     await expect(win.getByTestId('format-badge')).toHaveText('FLAC 24/96')
