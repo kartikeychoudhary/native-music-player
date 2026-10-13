@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell, webContents } from 'electron'
 import { spawn } from 'node:child_process'
-import { existsSync, statSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { PROTOCOL_VERSION } from '@protocol/ProtocolVersion'
@@ -13,7 +13,7 @@ import { enginePath } from './engine/enginePath'
 import { EngineSupervisor } from './engine/supervisor'
 import { installKind } from './installKind'
 import { logDir, logger } from './logs'
-import { audioFilesFromArgv, createFileOpener } from './openFiles'
+import { audioFilesFromArgv, createFileOpener, isRegularFile } from './openFiles'
 import { createResumer } from './resumeAfterUpdate'
 import { safeSend } from './safeSend'
 import { SettingsStore } from './settings'
@@ -64,7 +64,7 @@ const hookedSenders = new Set<number>()
 // Audio files the OS hands us: on the command line at start-up (double-click, Open with), through a second
 // launch's argv, or (macOS) an open-file event. Everything funnels through openFromOs; paths that arrive
 // before whenReady has built the opener wait in pendingOpen.
-const isFile = (p: string) => statSync(p, { throwIfNoEntry: false })?.isFile() === true
+const isFile = isRegularFile // never throws: this runs at module top level, holding the single-instance lock
 const fromArgv = (argv: readonly string[], cwd: string) => audioFilesFromArgv(argv, { isPackaged: app.isPackaged, cwd, exists: isFile })
 /** The audio files this process was launched with (the update resumer needs to know whether there were any). */
 const startupFiles = fromArgv(process.argv, process.cwd())

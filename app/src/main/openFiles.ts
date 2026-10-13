@@ -1,7 +1,23 @@
+import { statSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { AUDIO_EXTENSIONS } from '@shared/api'
 
 const audio = new Set<string>(AUDIO_EXTENSIONS)
+
+/**
+ * True for an existing regular file. Never throws: statSync's throwIfNoEntry only covers ENOENT, and
+ * EACCES, EPERM, ENAMETOOLONG, ELOOP, EIO or EINVAL (or a NUL in the path) must read as "no".
+ */
+export function isRegularFile(p: string): boolean {
+  try { return statSync(p, { throwIfNoEntry: false })?.isFile() === true } catch { return false }
+}
+
+/** An argument as a path: a file: URL (GIO passes percent-encoded URIs to a .desktop %U) is decoded, a malformed one is dropped. */
+function argToPath(arg: string): string | null {
+  if (!/^file:/i.test(arg)) return arg
+  try { return fileURLToPath(arg) } catch { return null }
+}
 
 /**
  * The audio files named on a command line (a double-click, "Open with Aurora" or a second launch).
@@ -12,9 +28,11 @@ export function audioFilesFromArgv(argv: readonly string[], o: { isPackaged: boo
   const out: string[] = []
   for (const arg of argv.slice(o.isPackaged ? 1 : 2)) {
     if (!arg || arg.startsWith('-')) continue
-    const dot = arg.lastIndexOf('.')
-    if (dot < 0 || !audio.has(arg.slice(dot + 1).toLowerCase())) continue
-    const path = isAbsolute(arg) ? arg : resolve(o.cwd, arg)
+    const name = argToPath(arg)
+    if (!name) continue
+    const dot = name.lastIndexOf('.')
+    if (dot < 0 || !audio.has(name.slice(dot + 1).toLowerCase())) continue
+    const path = isAbsolute(name) ? name : resolve(o.cwd, name)
     // Windows paths are case-insensitive: 'A.mp3' and 'a.MP3' are one file.
     const key = process.platform === 'win32' ? path.toLowerCase() : path
     if (seen.has(key) || !o.exists(path)) continue

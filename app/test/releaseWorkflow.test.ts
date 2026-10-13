@@ -96,7 +96,8 @@ describe('release workflow', () => {
   })
   it('keeps the Windows job alive through two SignPath waits and three builds', () => {
     const timeout = (wf.jobs.package as unknown as { 'timeout-minutes': string })['timeout-minutes']
-    expect(timeout).toBe("${{ matrix.os == 'windows' && 330 || 60 }}")
+    // Only a signing-configured Windows job waits on SignPath; unsigned builds keep the 60-minute limit.
+    expect(timeout).toBe("${{ matrix.os == 'windows' && vars.SIGNPATH_ORGANIZATION_ID != '' && 330 || 60 }}")
     const windows = Number(/&& (\d+) \|\|/.exec(timeout)![1])
     expect(windows).toBeLessThanOrEqual(360) // GitHub-hosted runner limit
     const waits = wf.jobs.package.steps.filter((s) => s.uses?.startsWith('signpath/')).map((s) => Number(s.with!['wait-for-completion-timeout-in-seconds']))

@@ -55,4 +55,23 @@ describe('install kind', () => {
     expect(Array.isArray(yml.linux.mimeTypes)).toBe(true)
     expect(yml.linux.mimeTypes as string[]).toContain('audio/flac')
   })
+  it('clears the dangling extension defaults on uninstall for exactly the associated extensions', () => {
+    const yml = parse(readFileSync(join(__dirname, '../electron-builder.yml'), 'utf8')) as { fileAssociations: { ext: string[] }[] }
+    const nsh = readFileSync(join(__dirname, '../build/installer.nsh'), 'utf8')
+    const cleared = [...nsh.matchAll(/^\s*!insertmacro auroraClearDefault "([^"]+)"/gm)].map((m) => m[1])
+    expect(new Set(cleared).size).toBe(cleared.length)
+    expect([...cleared].sort()).toEqual([...yml.fileAssociations[0].ext].sort())
+    // Only a real uninstall: an update re-registers the associations. Cleared before the context switch.
+    const body = nsh.slice(nsh.indexOf('!macro customUnInstall'))
+    expect(body.indexOf('${ifNot} ${isUpdated}')).toBeGreaterThanOrEqual(0)
+    expect(body.indexOf('auroraClearDefault "mp3"')).toBeLessThan(body.indexOf('SetShellVarContext current'))
+    // The shell context is switched only for a per-machine install, and always put back.
+    expect(body.match(/SetShellVarContext current/g)).toHaveLength(1)
+    expect(body.match(/SetShellVarContext all/g)).toHaveLength(1)
+    expect(body.indexOf('SetShellVarContext all')).toBeGreaterThan(body.indexOf('RMDir /r'))
+  })
+  it('hands Linux file managers local paths (%F) rather than only URIs', () => {
+    const yml = parse(readFileSync(join(__dirname, '../electron-builder.yml'), 'utf8')) as { linux: { executableArgs?: string[] } }
+    expect(yml.linux.executableArgs).toEqual(['%F'])
+  })
 })

@@ -75,6 +75,9 @@ linux:
   category: Audio
   # Only feeds the .desktop MimeType= line (see fileAssociations).
   mimeTypes: [audio/mpeg, audio/mp4, audio/x-m4a, audio/aac, audio/flac, audio/wav, audio/x-wav, audio/aiff, audio/x-aiff, audio/ogg, audio/opus, audio/x-dsf, audio/x-dff]
+  # The .desktop Exec line otherwise ends in %U, which hands over file:// URIs (still understood, but
+  # %F gives file managers local paths).
+  executableArgs: ['%F']
   synopsis: Hi-res music player
   description: Aurora plays local music libraries with gapless and bit-perfect output.
   target:
