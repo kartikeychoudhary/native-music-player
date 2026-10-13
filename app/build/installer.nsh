@@ -35,12 +35,19 @@
   WriteRegStr SHELL_CONTEXT "Software\Clients\Media\Aurora\Capabilities\FileAssociations" ".${EXT}" "Aurora.Audio"
 !macroend
 
-; Deletes a key only when it has no values, no subkeys and no (Default) value.
+; Deletes a key only when it has no named values, no subkeys and an unset or empty (Default) value.
+; Value index 0 may be an unnamed empty (Default) rather than a real value, so index 1 must be empty
+; too: otherwise a key holding named values such as Content Type or PerceivedType would be deleted.
 !macro auroraDeleteKeyIfEmpty KEY
   ClearErrors
   EnumRegValue $R1 SHELL_CONTEXT "${KEY}" 0
   ${if} ${Errors}
     StrCpy $R1 ""
+  ${endIf}
+  ClearErrors
+  EnumRegValue $R4 SHELL_CONTEXT "${KEY}" 1
+  ${if} ${Errors}
+    StrCpy $R4 ""
   ${endIf}
   ClearErrors
   EnumRegKey $R2 SHELL_CONTEXT "${KEY}" 0
@@ -50,6 +57,7 @@
   ClearErrors
   ReadRegStr $R3 SHELL_CONTEXT "${KEY}" ""
   ${if} $R1 == ""
+  ${andIf} $R4 == ""
   ${andIf} $R2 == ""
   ${andIf} $R3 == ""
     DeleteRegKey SHELL_CONTEXT "${KEY}"

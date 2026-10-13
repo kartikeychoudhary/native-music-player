@@ -81,7 +81,6 @@ describe('Windows file types are registered by installer.nsh, never by electron-
     // subkeys, no default); one that still holds anything stays.
     expect(un).toMatch(/auroraDeleteKeyIfEmpty "Software\\Classes\\\.\$\{EXT\}\\OpenWithProgids"/)
     expect(un).toMatch(/auroraDeleteKeyIfEmpty "Software\\Classes\\\.\$\{EXT\}"/)
-    expect(un.indexOf('OpenWithProgids"\n')).toBeLessThan(un.lastIndexOf('auroraDeleteKeyIfEmpty'))
     expect(un.indexOf('DeleteRegValue')).toBeLessThan(un.indexOf('auroraDeleteKeyIfEmpty'))
     expect(un.indexOf('auroraDeleteKeyIfEmpty "Software\\Classes\\.${EXT}\\OpenWithProgids"')).toBeLessThan(un.indexOf('auroraDeleteKeyIfEmpty "Software\\Classes\\.${EXT}"'))
     expect(un).not.toMatch(/DeleteRegKey/)
@@ -89,7 +88,10 @@ describe('Windows file types are registered by installer.nsh, never by electron-
     expect(empty).toMatch(/EnumRegValue \$R1 SHELL_CONTEXT "\$\{KEY\}" 0/)
     expect(empty).toMatch(/EnumRegKey \$R2 SHELL_CONTEXT "\$\{KEY\}" 0/)
     expect(empty).toMatch(/ReadRegStr \$R3 SHELL_CONTEXT "\$\{KEY\}" ""/)
-    expect(empty).toMatch(/\$R1 == ""\s+\$\{andIf\} \$R2 == ""\s+\$\{andIf\} \$R3 == ""\s+DeleteRegKey SHELL_CONTEXT "\$\{KEY\}"/)
+    // A second value (index 1) must be absent too: index 0 may be an unnamed empty (Default) with named
+    // values such as Content Type after it, and a key holding those must never be deleted.
+    expect(empty).toMatch(/EnumRegValue \$R4 SHELL_CONTEXT "\$\{KEY\}" 1/)
+    expect(empty).toMatch(/\$R1 == ""\s+\$\{andIf\} \$R4 == ""\s+\$\{andIf\} \$R2 == ""\s+\$\{andIf\} \$R3 == ""\s+DeleteRegKey SHELL_CONTEXT "\$\{KEY\}"/)
 
     // Placement, by order: [gate 1: clear a default that is ours] [removals] [gate 2: the data prompt].
     const gate = '${ifNot} ${isUpdated}'
