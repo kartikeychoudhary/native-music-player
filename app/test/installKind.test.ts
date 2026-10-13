@@ -27,6 +27,11 @@ describe('install kind', () => {
     expect(yml).toContain(`appId: ${APP_ID}`)
     expect(yml).toMatch(/owner: kartikeychoudhary\s+repo: native-music-player/)
   })
+  it('signs through the collect/apply hook as SignPath Foundation, sha256 only, exe and dll', () => {
+    const yml = readFileSync(join(__dirname, '../electron-builder.yml'), 'utf8')
+    expect(yml).toMatch(/signtoolOptions:\s+sign: build-tools\/sign\.cjs\s+publisherName: SignPath Foundation\s+signingHashAlgorithms: \[sha256\]/)
+    expect(yml).toMatch(/signExts: \[\.exe, \.dll\]/)
+  })
   it('gives Linux packages the homepage and maintainer they require', () => {
     const pkg = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8')) as { homepage?: string; author?: { name?: string; email?: string } }
     expect(pkg.homepage?.startsWith('https://github.com/kartikeychoudhary/native-music-player')).toBe(true)

@@ -13,6 +13,10 @@ app/build/generated/
 app/resources/engine/
 app/dist-nofdk/
 
+# Windows signing (package-ci.ts --sign-mode): staged engines and the collect/apply cache
+/engines/
+/sign/
+
 # Generated test fixtures
 fixtures/out/
 
