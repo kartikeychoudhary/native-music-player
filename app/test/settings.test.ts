@@ -26,6 +26,13 @@ describe('settings', () => {
     expect(mergeSettings(DEFAULT_SETTINGS, { autoUpdate: 'no' }).autoUpdate).toBe(true)
   })
 
+  it('merges the resume-after-update flag, defaulting to off and ignoring non-booleans', () => {
+    expect(mergeSettings(DEFAULT_SETTINGS, {}).resumeAfterUpdate).toBe(false)
+    expect(mergeSettings(DEFAULT_SETTINGS, { resumeAfterUpdate: true }).resumeAfterUpdate).toBe(true)
+    expect(mergeSettings({ ...DEFAULT_SETTINGS, resumeAfterUpdate: true }, { resumeAfterUpdate: 'no' }).resumeAfterUpdate).toBe(true)
+    expect(mergeSettings(DEFAULT_SETTINGS, { resumeAfterUpdate: 1 }).resumeAfterUpdate).toBe(false)
+  })
+
   it('loads defaults for missing or corrupt files', () => {
     const d = dir()
     expect(loadSettings(join(d, 'none.json'))).toEqual(DEFAULT_SETTINGS)

@@ -14,6 +14,7 @@ import { EngineSupervisor } from './engine/supervisor'
 import { installKind } from './installKind'
 import { logDir, logger } from './logs'
 import { audioFilesFromArgv, createFileOpener } from './openFiles'
+import { createResumer } from './resumeAfterUpdate'
 import { safeSend } from './safeSend'
 import { SettingsStore } from './settings'
 import { createTray } from './tray'
@@ -90,6 +91,8 @@ app.whenReady().then(() => {
     onMainClosed: () => { if (process.platform !== 'darwin') app.quit() },
     onVisibilityChange: () => syncWindows(),
   })
+  // An update restart that interrupted playback resumes it on the next launch (unless that launch is to open files).
+  const resumer = createResumer({ get: () => settings.get().resumeAfterUpdate, set: (v) => { settings.update({ resumeAfterUpdate: v }); settings.flush() }, play: () => supervisor.call('player.play', {}) })
   const callQuiet = (m: 'player.toggle' | 'player.next' | 'player.prev') => { supervisor.call(m, {}).catch(() => {}) }
   const tray = createTray({
     toggle: () => callQuiet('player.toggle'), next: () => callQuiet('player.next'), prev: () => callQuiet('player.prev'),
@@ -105,6 +108,7 @@ app.whenReady().then(() => {
   supervisor.on('notification', (m: string, p: unknown) => {
     if (m !== 'player.state') return
     const s = p as { status: string; track: { title: string; artist: string | null } | null }
+    resumer.noteStatus(s.status)
     const stopped = s.status === 'stopped'
     tray.update({ playing: s.status === 'playing', title: stopped ? null : s.track?.title ?? null, artist: stopped ? null : s.track?.artist ?? null })
   })
@@ -115,6 +119,8 @@ app.whenReady().then(() => {
 
   supervisor.on('frame', (t: number, d: Uint8Array) => viz.frame(t, d))
   supervisor.on('status', (s) => { if (s.state === 'ready') viz.engineReady() })
+  // The engine restores the session (paused) before it announces ready, so player.play resumes that queue.
+  supervisor.on('status', (s) => { if (s.state === 'ready') resumer.engineReady({ openingFiles: startupFiles.length > 0 }) })
 
   const fileOpener = createFileOpener({ call: (m, p) => supervisor.call(m, p), onOpen: () => windows.showMain(), onError: (e) => engineLog(`[open files] ${String(e)}`) })
   opener = fileOpener
@@ -187,7 +193,7 @@ app.whenReady().then(() => {
     mode, currentVersion: app.getVersion(), enabled: () => settings.get().autoUpdate,
     autoUpdater: () => { const { autoUpdater } = require('electron-updater') as typeof import('electron-updater'); autoUpdater.logger = { info: engineLog, warn: engineLog, error: engineLog, debug: () => {} } as never; return autoUpdater },
     latestVersion: () => latestPublishedVersion(net.fetch as unknown as typeof fetch),
-    beforeInstall: async () => { quitting = true; windows.saveMainBounds(); settings.flush(); await supervisor.stop() },
+    beforeInstall: async () => { resumer.beforeUpdateRestart(); quitting = true; windows.saveMainBounds(); settings.flush(); await supervisor.stop() },
     quit: () => app.quit(),
     onState: (s) => windows.send('update.state', s),
     setTimer: (fn, ms) => setTimeout(fn, ms), setRepeat: (fn, ms) => setInterval(fn, ms),
