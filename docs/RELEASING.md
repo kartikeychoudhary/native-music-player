@@ -58,7 +58,7 @@ Automation cannot cover audio hardware or other operating systems. Run the per-r
 And these checks that belong to packaging and updates:
 
 - Install with the NSIS installer and play a track. The media flyout shows "Aurora" with its icon.
-- Install the previous release, publish the new draft, and confirm the old app offers the update. It should install it on **Restart now** while music was playing, and come back with the queue restored (paused).
+- Install the previous release, publish the new draft, and confirm the old app offers the update. It should install it on **Restart now** while music was playing, relaunch, and resume playing the queue.
 - Check that the AppImage, deb and rpm start on Ubuntu 22.04 and on a current Fedora.
 - Check that the unsigned macOS build opens after **Open Anyway**.
 - Check that the no-fdk build plays FLAC and shows "Not in this build" in About.

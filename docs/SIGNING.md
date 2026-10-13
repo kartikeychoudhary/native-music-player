@@ -22,13 +22,13 @@ The pipeline is in the repository but dormant. The release workflow only uses it
 
 - `package-ci.ts --sign-mode collect` gathers every file electron-builder wants signed (through `build-tools/sign.cjs`), plus the engines, into `sign/to-sign/`. Each file is named by its content hash.
 - SignPath signs those files.
-- `package-ci.ts --sign-mode apply` builds again, and the sign hook swaps in the signed copies by hash. A missing copy fails the build.
+- `package-ci.ts --sign-mode apply` builds again, and the sign hook swaps in the signed copies by hash. A missing copy (except the uninstaller) fails the build.
 
 **Then the installer.** SignPath signs the installer. That changes its bytes, so `finalize-windows.ts` refreshes the sha512 and size in `latest.yml` and rewrites the blockmap. `check-signatures.ps1` verifies the result.
 
 **Publisher.** Only release-signed builds (tag pushes, built with `--release-signed`) write `publisherName: SignPath Foundation` into `app-update.yml`. Installed copies of such a build then accept only updates signed by that publisher. A test-signed build never carries it.
 
-**Uninstaller.** It stays unsigned, because electron-builder regenerates it with different bytes on every build.
+**Uninstaller.** It is signed only if electron-builder regenerates byte-identical bytes, which it normally does not. So it normally stays unsigned, and the build warns about it.
 
 ## Switching it on with SignPath
 
@@ -55,7 +55,7 @@ In GitHub (Settings, Secrets and variables, Actions):
 
 The collect and apply mechanism is not tied to SignPath. It works with a paid certificate, a cloud HSM or Azure Trusted Signing.
 
-1. In `.github/workflows/release.yml`, replace the two SignPath steps with steps that sign every file in `sign/to-sign/` into `sign/signed/`, keeping the file names, and that sign the installer.
+1. In `.github/workflows/release.yml`, replace the two SignPath steps with steps that sign every file in `sign/to-sign/` into `sign/signed/`, keeping the file names, and that sign the installer. Keep the `vars.SIGNPATH_ORGANIZATION_ID` condition on those steps, or replace it with your own on/off switch, because the other signing steps in the workflow are conditioned on it.
 2. Set `SIGNPATH_PUBLISHER` in `app/build-tools/package-ci.ts` to the new certificate's subject CN. Rename the constant if you like.
 3. Update the publisher in the workflow's "Check the installer signature" step.
 
@@ -71,7 +71,7 @@ Run this for every release, signed or not:
 
 - The wizard shows the Studio sidebar and header and the MIT license page.
 - A per-user install needs no admin prompt.
-- Double-clicking an `.mp3` or `.flac` opens and plays it in Aurora.
+- With Aurora set as the default app for `.mp3` and `.flac`, double-clicking one opens and plays it in Aurora. Open with Aurora works without that.
 - An interactive uninstall asks the clean-up question. **No** keeps `%APPDATA%\Aurora`; **Yes** deletes it.
 - An update installed with **Restart now** while music plays relaunches and resumes playback.
 - `%LOCALAPPDATA%\aurora-updater`, the updater's download cache, is not removed by the clean uninstall. That is expected.

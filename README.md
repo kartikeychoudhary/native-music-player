@@ -18,7 +18,7 @@ Download the assets for your system from the [latest release](https://github.com
 
 `SHA256SUMS.txt` lists a checksum for every file.
 
-**Open with Aurora.** Installed copies register for the audio formats (not `.mp4`, which is usually video). Double-clicking a file, or choosing Open with Aurora, plays it, including when Aurora is already running.
+**Open with Aurora.** Installed copies register for the audio formats (not `.mp4`, which is usually video). Choosing Open with Aurora plays a file, and so does double-clicking it once Aurora is the default app for that type. Either way the file goes to Aurora if it is already running.
 
 **Uninstall.** An interactive uninstall asks whether to also delete the library, playlists, settings and cover cache. Updates never ask and never delete anything.
 
