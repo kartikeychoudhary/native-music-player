@@ -44,6 +44,18 @@ export function limitArches(args: string[], platform: Platform, arches: readonly
   return out
 }
 
+/**
+ * The engine binary to stage. In the apply pass this is still the unsigned engine, once its signed copy is known to
+ * exist: electron-builder runs the sign hook on resources/bin/<platform>-<arch>/aurora-engine.exe too, and the hook swaps in the
+ * signed copy by the unsigned bytes' hash, as for Aurora.exe and the DLLs. A staged signed engine has no signed copy
+ * of its own, so the hook would fail the build.
+ */
+export function engineToStage(o: { src: string; name: string; signMode?: SignMode; signedCopy: (src: string) => string | null }): string {
+  if (o.signMode !== 'apply') return o.src
+  if (!o.signedCopy(o.src)) throw new Error(`no signed copy of ${o.name}`)
+  return o.src
+}
+
 function cli(): number {
   const usage = 'usage: package-ci.ts --platform win32|darwin|linux [--signed] [--sign-mode collect|apply --sign-dir <dir>]'
   const arg = (n: string) => { const i = process.argv.indexOf(`--${n}`); return i > 0 ? process.argv[i + 1] : undefined }
@@ -78,12 +90,9 @@ function cli(): number {
     builder(builderArgs({ platform, variant: 'standard', signed, signMode }))
     console.log(`to-sign: ${readdirSync(join(signDir, 'to-sign')).length} files`)
   } else {
-    const staged = (arch: Arch, variant: string) => {
-      if (signMode !== 'apply') return engine(arch, variant)
-      const copy = signCache.signedCopy(engine(arch, variant), join(signDir, 'signed'))
-      if (!copy) throw new Error(`no signed copy of engines/${arch}/${variant}/${exe}`)
-      return copy
-    }
+    const staged = (arch: Arch, variant: string) => engineToStage({
+      src: engine(arch, variant), name: `engines/${arch}/${variant}/${exe}`, signMode, signedCopy: (src) => signCache.signedCopy(src, join(signDir, 'signed')),
+    })
     for (const variant of ['standard', 'nofdk'] as const) {
       for (const arch of arches) stageEngine({ src: staged(arch, variant), appRoot: app, platform, arch })
       node('licenses.ts', ...targets, ...(variant === 'nofdk' ? ['--no-fdk'] : []))

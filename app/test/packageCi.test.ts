@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { builderArgs, limitArches } from '../build-tools/package-ci.ts'
+import { builderArgs, engineToStage, limitArches } from '../build-tools/package-ci.ts'
 
 describe('CI packaging arguments', () => {
   it('builds both arches of the standard variant without publishing', () => {
@@ -29,5 +29,12 @@ describe('CI packaging arguments', () => {
     expect(limitArches(std, 'win32', ['x64'])).toEqual(['--win', 'nsis', 'zip', '--x64', '--publish', 'never'])
     expect(limitArches(builderArgs({ platform: 'win32', variant: 'standard', signed: false, signMode: 'collect' }), 'win32', ['x64'])).toEqual(['--win', 'nsis', '--x64', '--publish', 'never'])
     expect(limitArches(builderArgs({ platform: 'win32', variant: 'nofdk', signed: false }), 'win32', ['x64']).slice(0, 3)).toEqual(['--win', 'zip', '--x64'])
+  })
+  it('stages the unsigned engine in the apply pass, so the sign hook can swap in its signed copy by hash', () => {
+    const name = 'engines/x64/standard/aurora-engine.exe'
+    const src = 'C:/repo/engines/x64/standard/aurora-engine.exe'
+    expect(engineToStage({ src, name, signMode: 'apply', signedCopy: () => 'C:/repo/sign/signed/abc-aurora-engine.exe' })).toBe(src)
+    expect(() => engineToStage({ src, name, signMode: 'apply', signedCopy: () => null })).toThrow('no signed copy of engines/x64/standard/aurora-engine.exe')
+    expect(engineToStage({ src, name, signedCopy: () => { throw new Error('not consulted') } })).toBe(src)
   })
 })
