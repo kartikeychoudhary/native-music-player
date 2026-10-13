@@ -20,7 +20,7 @@ Download the assets for your system from the [latest release](https://github.com
 
 **No-fdk archives.** The files ending in `-nofdk.zip` and `-nofdk.tar.gz` are portable builds without the Fraunhofer FDK AAC decoder, for distributions that treat it as non-free. Everything else works the same, but HE-AAC files report "codec not in this build".
 
-**Unsigned Windows builds.** SmartScreen shows "Windows protected your PC". Choose More info, then Run anyway.
+**Windows code signing.** Windows builds are code signed through the [SignPath Foundation](https://signpath.org)'s free programme for open-source projects; see [Code signing policy](#code-signing-policy). Builds made before signing was set up are unsigned: SmartScreen shows "Windows protected your PC", so choose More info, then Run anyway.
 
 **Unsigned macOS builds.** macOS blocks the first launch. Open System Settings, Privacy & Security, and choose Open Anyway. If macOS says the app "is damaged", run `xattr -dr com.apple.quarantine /Applications/Aurora.app` and open it again.
 
@@ -146,6 +146,21 @@ Besides JSON-RPC, the engine sends binary spectrum frames on stdout: a `0x1E` ma
 LDAC and similar codecs are Bluetooth transmission codecs, not file formats. Aurora hands unaltered audio to the OS (exclusive or bit-perfect where possible) so the Bluetooth stack can use its highest tier.
 
 Aurora only shows the active Bluetooth codec where the OS reports it. On Linux it is read from PipeWire. On Windows and macOS there is no public API for it: Aurora detects that the output is a Bluetooth device and shows "Codec not reported by the OS". It never guesses.
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+
+Windows releases are built from this repository's source by the GitHub Actions [Release workflow](.github/workflows/release.yml), and only those builds are submitted for signing. Every signing request is approved by hand.
+
+**Team roles**
+
+- Committers and reviewers: [kartikeychoudhary](https://github.com/kartikeychoudhary)
+- Approvers: [kartikeychoudhary](https://github.com/kartikeychoudhary)
+
+### Privacy policy
+
+Aurora plays your local files and sends no personal data, analytics or telemetry anywhere. It makes one kind of network request: the update check, which asks GitHub's public API for the latest release of this project, and, for installers that update themselves, downloads that release from GitHub. You can turn the check off in Settings → About. Aurora will not transfer any other information to networked systems unless you specifically ask it to.
 
 ## License
 
