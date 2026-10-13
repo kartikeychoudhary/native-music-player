@@ -26,16 +26,6 @@ publish:
   owner: kartikeychoudhary
   repo: native-music-player
   releaseType: draft
-# "Open with Aurora" / double-click (the app reads files from argv, second-instance and open-file).
-# The extension list is AUDIO_EXTENSIONS from src/shared/api.ts without mp4, which is usually video
-# (m4a and m4b cover audio); a test keeps them in step. `name` becomes a registry class key under
-# HKCU/Software/Classes on Windows, which the uninstaller deletes whole, so it must be Aurora's own.
-# Linux MIME types are under linux.mimeTypes: an association's mimeType would write malformed MIME XML.
-fileAssociations:
-  - ext: [mp3, m4a, m4b, aac, flac, wav, aif, aiff, aifc, ogg, oga, opus, dsf, dff]
-    name: Aurora.Audio
-    description: Audio file
-    role: Viewer
 win:
   target:
     - { target: nsis, arch: [x64, arm64] }
@@ -66,6 +56,18 @@ nsis:
   runAfterFinish: true
 mac:
   category: public.app-category.music
+  # "Open with Aurora" / double-click (the app reads files from argv, second-instance and open-file).
+  # The extension list is AUDIO_EXTENSIONS from src/shared/api.ts without mp4, which is usually video
+  # (m4a and m4b cover audio); a test keeps them in step. This is under mac only on purpose: a top-level
+  # fileAssociations would also make NSIS write each extension's default value on Windows, taking over
+  # the user's default player. Windows registers its types in build/installer.nsh (Open with and
+  # Default apps only), and Linux uses linux.mimeTypes below (an association's mimeType would write
+  # malformed MIME XML).
+  fileAssociations:
+    - ext: [mp3, m4a, m4b, aac, flac, wav, aif, aiff, aifc, ogg, oga, opus, dsf, dff]
+      name: Aurora.Audio
+      description: Audio file
+      role: Viewer
   minimumSystemVersion: "12.0"
   hardenedRuntime: true
   target:
@@ -73,7 +75,7 @@ mac:
     - { target: zip, arch: [x64, arm64] }
 linux:
   category: Audio
-  # Only feeds the .desktop MimeType= line (see fileAssociations).
+  # Only feeds the .desktop MimeType= line (see mac.fileAssociations).
   mimeTypes: [audio/mpeg, audio/mp4, audio/x-m4a, audio/aac, audio/flac, audio/wav, audio/x-wav, audio/aiff, audio/x-aiff, audio/ogg, audio/opus, audio/x-dsf, audio/x-dff]
   # The .desktop Exec line otherwise ends in %U, which hands over file:// URIs (still understood, but
   # %F gives file managers local paths).

@@ -43,13 +43,12 @@ None was judged a blocker by the final review.
 - Final: minor (deferred): `app/test/openFiles.test.ts` contains a literal NUL byte, so git treats it as binary. Replace it with `'bad\0name.mp3'`.
 - Final: minor (deferred): `process.cwd()` at module top level in `index.ts` throws if the launch directory was deleted. Same class as the fixed `isFile` crash, but rare.
 
-## Known limitation: installing takes over classic file-type defaults
+## Fixed: installing no longer takes over file-type defaults
 
-electron-builder's `APP_ASSOCIATE` writes `HKCU\Software\Classes\.<ext>` (default) = `Aurora.Audio` at install.
-- **Effect on install:** for users whose audio defaults are classic registry associations, rather than a Windows "UserChoice", installing Aurora makes Aurora the handler for those types.
-- **Effect on uninstall:** it clears only the defaults that still point at Aurora. It cannot restore the previous default, because electron-builder keeps no backup.
-- **Seen on the dev machine:** the test install replaced VLC's `.mp3`/`.flac`/… defaults.
-- **Possible fix:** register Windows associations from `installer.nsh` instead (ProgID, `OpenWithProgids` and `Applications\Aurora.exe\SupportedTypes`, without touching the `.ext` default). Keep `fileAssociations` for macOS and Linux only.
+electron-builder's `APP_ASSOCIATE` wrote `Software\Classes\.<ext>` (default) = `Aurora.Audio` at install, which made Aurora the default player for users with classic registry associations (it replaced VLC's on the dev machine) and could not be undone.
+- **Now:** `fileAssociations` is under `mac` only. `app/build/installer.nsh` registers Windows types itself: the `Aurora.Audio` ProgID, `OpenWithProgids`, `Applications\Aurora.exe` (`SupportedTypes`) and the Default apps capabilities (`Clients\Media\Aurora`, `RegisteredApplications`). It never writes an extension default.
+- **Uninstall** removes exactly those entries, plus any `.ext` default that an earlier test build left pointing at `Aurora.Audio`.
+- **Proof:** a silent install and uninstall of the packaged installer left every `.ext` default identical, and the registry identical to before after the uninstall.
 
 ## Pending human checks
 

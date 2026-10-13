@@ -72,6 +72,7 @@ Run this for every release, signed or not:
 - The wizard shows the Studio sidebar and header and the MIT license page.
 - A per-user install needs no admin prompt.
 - With Aurora set as the default app for `.mp3` and `.flac`, double-clicking one opens and plays it in Aurora. Open with Aurora works without that.
+- Installing doesn't change existing default apps: the default for `.mp3`, `.flac` and the other audio types is the same before and after, and Aurora is listed under Open with and in Settings → Default apps. Uninstalling removes those entries and leaves the defaults alone.
 - An interactive uninstall asks the clean-up question. **No** keeps `%APPDATA%\Aurora`; **Yes** deletes it.
 - An update installed with **Restart now** while music plays relaunches and resumes playback.
 - `%LOCALAPPDATA%\aurora-updater`, the updater's download cache, is not removed by the clean uninstall. That is expected.
