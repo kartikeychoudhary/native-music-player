@@ -91,6 +91,20 @@ describe('fallback text for components that ship no license file', () => {
     expect(fallbackText(bare('CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception', []), template)).toEqual({ texts: [], elected: 'CC0-1.0 (no attribution required)' })
     expect(fallbackText(bare('Unlicense/MIT'), template)).toEqual({ texts: [], elected: 'Unlicense (no attribution required)' })
   })
+  it('takes the copyright holder from a cited override when Cargo.toml lists no authors', () => {
+    const meta: CargoMetadata = {
+      packages: [
+        { id: 'root', name: 'aurora-engine', version: '0.1.0', license: 'MIT', manifest_path: '/w/a/Cargo.toml', source: null },
+        { id: 'o', name: 'objc2-core-audio', version: '0.3.2', license: 'Zlib OR Apache-2.0 OR MIT', manifest_path: '/reg/objc2-core-audio-0.3.2/Cargo.toml', source: 'registry+x', authors: [] },
+      ],
+      resolve: { root: 'root', nodes: [{ id: 'root', deps: [{ pkg: 'o', dep_kinds: [{ kind: null }] }] }, { id: 'o', deps: [] }] },
+    }
+    const [c] = cargoComponents(meta, () => [])
+    const got = fallbackText(c, template)
+    expect(got?.elected).toBe('MIT')
+    expect(got?.texts[0].text).toContain('Copyright (c) Mads Marquart')
+    expect(got?.texts[0].file).toBe('MIT (canonical text: the crate ships no license file; copyright holder from the objc2 repository\'s LICENSE-MIT.txt)')
+  })
   it('fails when no fallback applies: no MIT branch, or MIT without authors', () => {
     expect(fallbackText(bare('Apache-2.0'), template)).toBeNull()
     expect(fallbackText(bare('MIT OR Apache-2.0', []), template)).toBeNull()

@@ -11,6 +11,8 @@ export interface Component {
   authors?: string[]
   /** The license chosen from a multi-license expression, when it matters to the reader (set by fallbackText). */
   elected?: string
+  /** Where the copyright holders came from when they aren't the package's own metadata (COPYRIGHT_OVERRIDES). */
+  copyrightSource?: string
 }
 export interface CargoPackage { id: string; name: string; version: string; license: string | null; manifest_path: string; source: string | null; authors?: string[] }
 export interface CargoMetadata { packages: CargoPackage[]; resolve: { root: string | null; nodes: { id: string; deps: { pkg: string; dep_kinds: { kind: string | null }[] }[] }[] } }
@@ -29,6 +31,19 @@ export const ALLOWED = new Set([
  * Each entry needs a comment naming where the license was read.
  */
 export const LICENSE_OVERRIDES: Record<string, string> = {}
+
+/**
+ * Copyright holders for crates that ship no license file and list no Cargo.toml authors, read from the
+ * crate's repository. Used only for the canonical-MIT fallback; `source` is printed with the text.
+ */
+const OBJC2 = { holders: ['Mads Marquart'], source: "the objc2 repository's LICENSE-MIT.txt" } // github.com/madsmtm/objc2, LICENSE-MIT.txt
+export const COPYRIGHT_OVERRIDES: Record<string, { holders: string[]; source: string }> = {
+  'objc2-audio-toolbox': OBJC2,
+  'objc2-core-audio': OBJC2,
+  'objc2-core-audio-types': OBJC2,
+  'objc2-core-foundation': OBJC2,
+  'objc2-foundation': OBJC2,
+}
 
 /**
  * Vendored C libraries whose license file sits below the crate root (paths relative to it). The
@@ -79,7 +94,12 @@ export function cargoComponents(meta: CargoMetadata, readTexts: (dir: string, ex
     const pkg = byId.get(id)!
     if (pkg.source !== null) {
       const license = LICENSE_OVERRIDES[pkg.name] ?? pkg.license
-      out.push({ source: 'cargo', name: pkg.name, version: pkg.version, license, texts: readTexts(dirname(pkg.manifest_path), EXTRA_TEXTS[pkg.name]), authors: pkg.authors ?? [] })
+      const override = pkg.authors?.length ? undefined : COPYRIGHT_OVERRIDES[pkg.name]
+      out.push({
+        source: 'cargo', name: pkg.name, version: pkg.version, license, texts: readTexts(dirname(pkg.manifest_path), EXTRA_TEXTS[pkg.name]),
+        authors: override ? override.holders : pkg.authors ?? [],
+        ...(override ? { copyrightSource: override.source } : {}),
+      })
     }
     for (const d of nodes.get(id)?.deps ?? []) if (d.dep_kinds.some((k) => k.kind === null)) walk(d.pkg)
   }
@@ -121,7 +141,9 @@ export function fallbackText(c: Component, mitTemplate: string): { texts: Licens
   const text = mitTemplate.replace('{{copyright}}', `Copyright (c) ${authors.join(', ')}`)
   const file = c.source === 'npm'
     ? 'MIT (canonical text: the package ships no license file; copyright from its package.json author)'
-    : 'MIT (canonical text: the crate ships no license file; copyright from its Cargo.toml authors)'
+    : c.copyrightSource
+      ? `MIT (canonical text: the crate ships no license file; copyright holder from ${c.copyrightSource})`
+      : 'MIT (canonical text: the crate ships no license file; copyright from its Cargo.toml authors)'
   return { texts: [{ file, text }], ...(branches.length > 1 ? { elected: 'MIT' } : {}) }
 }
 
