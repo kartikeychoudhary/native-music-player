@@ -16,9 +16,9 @@ export function musicFolder(files: string[]): string {
   return dir
 }
 
-export async function launchAurora(o: { dataDir: string; musicDir?: string; openFiles?: string; speed?: number }): Promise<{ app: ElectronApplication; win: Page }> {
+export async function launchAurora(o: { dataDir: string; musicDir?: string; openFiles?: string; speed?: number; args?: string[] }): Promise<{ app: ElectronApplication; win: Page }> {
   const app = await electron.launch({
-    args: [resolve(__dirname, '../out/main/index.js')],
+    args: [resolve(__dirname, '../out/main/index.js'), ...(o.args ?? [])],
     env: {
       ...process.env,
       AURORA_ENGINE_PATH: resolve(root, 'engine/target/debug', exe),

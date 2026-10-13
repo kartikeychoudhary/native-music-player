@@ -13,6 +13,7 @@ import { enginePath } from './engine/enginePath'
 import { EngineSupervisor } from './engine/supervisor'
 import { installKind } from './installKind'
 import { logDir, logger } from './logs'
+import { audioFilesFromArgv, createFileOpener } from './openFiles'
 import { safeSend } from './safeSend'
 import { SettingsStore } from './settings'
 import { createTray } from './tray'
@@ -59,7 +60,25 @@ const viz = createVizHub({
 })
 const hookedSenders = new Set<number>()
 
-app.on('second-instance', () => { if (windows) windows.showMain() })
+// Audio files the OS hands us: on the command line at start-up (double-click, Open with), through a second
+// launch's argv, or (macOS) an open-file event. Everything funnels through openFromOs; paths that arrive
+// before whenReady has built the opener wait in pendingOpen.
+const fromArgv = (argv: readonly string[], cwd: string) => audioFilesFromArgv(argv, { isPackaged: app.isPackaged, cwd, exists: existsSync })
+/** The audio files this process was launched with (the update resumer needs to know whether there were any). */
+const startupFiles = fromArgv(process.argv, process.cwd())
+let opener: ReturnType<typeof createFileOpener> | undefined
+let pendingOpen: string[] = []
+const openFromOs = (paths: string[]) => { if (opener) opener.open(paths); else pendingOpen.push(...paths) }
+
+app.on('second-instance', (_e, argv, workingDirectory) => {
+  if (windows) windows.showMain()
+  openFromOs(fromArgv(argv, workingDirectory))
+})
+// macOS delivers "Open with" and Dock drops here, never through argv. Must be registered before ready.
+app.on('open-file', (e, path) => {
+  e.preventDefault()
+  openFromOs(audioFilesFromArgv([process.execPath, path], { isPackaged: true, cwd: process.cwd(), exists: existsSync }))
+})
 
 app.whenReady().then(() => {
   if (!primary) return
@@ -95,6 +114,13 @@ app.whenReady().then(() => {
 
   supervisor.on('frame', (t: number, d: Uint8Array) => viz.frame(t, d))
   supervisor.on('status', (s) => { if (s.state === 'ready') viz.engineReady() })
+
+  const fileOpener = createFileOpener({ call: (m, p) => supervisor.call(m, p), onOpen: () => windows.showMain() })
+  opener = fileOpener
+  supervisor.on('status', (s) => { if (s.state === 'ready') fileOpener.engineReady(); else fileOpener.engineLost() })
+  fileOpener.open(startupFiles)
+  fileOpener.open(pendingOpen)
+  pendingOpen = []
 
   protocol.handle(ART_SCHEME, createArtHandler(
     (method, params) => supervisor.call(method, params) as never,

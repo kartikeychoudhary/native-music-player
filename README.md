@@ -18,6 +18,8 @@ Download the assets for your system from the [latest release](https://github.com
 
 `SHA256SUMS.txt` lists a checksum for every file.
 
+Installed copies register for audio files: right-click a song and choose Open with, or double-click it once Aurora is its default app. Open files go to the running Aurora, or start it.
+
 **No-fdk archives.** The files ending in `-nofdk.zip` and `-nofdk.tar.gz` are portable builds without the Fraunhofer FDK AAC decoder, for distributions that treat it as non-free. Everything else works the same, but HE-AAC files report "codec not in this build".
 
 **Windows code signing.** Windows builds are code signed through the [SignPath Foundation](https://signpath.org)'s free programme for open-source projects; see [Code signing policy](#code-signing-policy). Builds made before signing was set up are unsigned: SmartScreen shows "Windows protected your PC", so choose More info, then Run anyway.

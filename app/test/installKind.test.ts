@@ -1,8 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { parse } from 'yaml'
 import { APP_ID } from '../src/main/appIdentity'
 import { installKind } from '../src/main/installKind'
+import { AUDIO_EXTENSIONS } from '../src/shared/api'
 
 const base = { isPackaged: true, env: {}, exists: () => false }
 describe('install kind', () => {
@@ -38,5 +40,11 @@ describe('install kind', () => {
     expect(pkg.homepage?.startsWith('https://github.com/kartikeychoudhary/native-music-player')).toBe(true)
     expect(pkg.author?.name).toBeTruthy()
     expect(pkg.author?.email).toBeTruthy()
+  })
+  it('associates every audio extension Aurora plays, and nothing else', () => {
+    const yml = parse(readFileSync(join(__dirname, '../electron-builder.yml'), 'utf8')) as { fileAssociations?: { ext: string[]; role?: string }[] }
+    expect(yml.fileAssociations).toHaveLength(1)
+    expect(yml.fileAssociations![0].ext).toEqual([...AUDIO_EXTENSIONS])
+    expect(yml.fileAssociations![0].role).toBe('Viewer')
   })
 })

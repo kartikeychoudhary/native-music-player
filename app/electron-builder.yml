@@ -26,6 +26,15 @@ publish:
   owner: kartikeychoudhary
   repo: native-music-player
   releaseType: draft
+# "Open with Aurora" / double-click (the app reads files from argv, second-instance and open-file).
+# The extension list mirrors AUDIO_EXTENSIONS in src/shared/api.ts (a test keeps them equal).
+# mimeType is one string (linux-only); the semicolons are written straight into the .desktop MimeType= line.
+fileAssociations:
+  - ext: [mp3, m4a, m4b, mp4, aac, flac, wav, aif, aiff, aifc, ogg, oga, opus, dsf, dff]
+    name: Audio
+    description: Audio file
+    role: Viewer
+    mimeType: audio/mpeg;audio/mp4;audio/x-m4a;audio/aac;audio/flac;audio/wav;audio/x-wav;audio/aiff;audio/x-aiff;audio/ogg;audio/opus;audio/x-dsf;audio/x-dff
 win:
   target:
     - { target: nsis, arch: [x64, arm64] }
