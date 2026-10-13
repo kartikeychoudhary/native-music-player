@@ -31,11 +31,12 @@ win:
     - { target: nsis, arch: [x64, arm64] }
     - { target: zip, arch: [x64, arm64] }
   # Signing is done by SignPath in CI in two passes (docs/SIGNING.md); build-tools/sign.cjs collects or
-  # applies signed copies and does nothing unless AURORA_SIGN_MODE is set. publisherName goes into
-  # app-update.yml: electron-updater rejects any update not signed by this publisher.
+  # applies signed copies and does nothing unless AURORA_SIGN_MODE is set. The publisher name is not set
+  # here: it goes into app-update.yml, and electron-updater then rejects any update not signed by that
+  # publisher, which would strand an unsigned build's users. package-ci.ts adds it in the signed (apply)
+  # pass only.
   signtoolOptions:
     sign: build-tools/sign.cjs
-    publisherName: SignPath Foundation
     signingHashAlgorithms: [sha256]
   signExts: [.exe, .dll]
 nsis:

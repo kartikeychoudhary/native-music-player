@@ -1,5 +1,8 @@
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { builderArgs, engineToStage, limitArches } from '../build-tools/package-ci.ts'
+import { SIGNPATH_PUBLISHER, builderArgs, builderEnv, engineToStage, limitArches, resetToSign } from '../build-tools/package-ci.ts'
 
 describe('CI packaging arguments', () => {
   it('builds both arches of the standard variant without publishing', () => {
@@ -18,10 +21,31 @@ describe('CI packaging arguments', () => {
   it('the collect pass builds only the standard NSIS installer (both arches), to gather every file to sign', () => {
     expect(builderArgs({ platform: 'win32', variant: 'standard', signed: false, signMode: 'collect' })).toEqual(['--win', 'nsis', '--x64', '--arm64', '--publish', 'never'])
   })
-  it('the apply pass builds exactly what an unsigned run builds', () => {
+  it('the apply pass builds what an unsigned run builds, plus the SignPath publisher for electron-updater', () => {
+    const publisher = `-c.win.signtoolOptions.publisherName=${SIGNPATH_PUBLISHER}`
+    expect(SIGNPATH_PUBLISHER).toBe('SignPath Foundation')
     for (const variant of ['standard', 'nofdk'] as const) {
-      expect(builderArgs({ platform: 'win32', variant, signed: false, signMode: 'apply' })).toEqual(builderArgs({ platform: 'win32', variant, signed: false }))
+      expect(builderArgs({ platform: 'win32', variant, signed: false, signMode: 'apply' })).toEqual([...builderArgs({ platform: 'win32', variant, signed: false }), publisher])
+      expect(builderArgs({ platform: 'win32', variant, signed: false })).not.toContain(publisher)
     }
+    expect(builderArgs({ platform: 'win32', variant: 'standard', signed: false, signMode: 'collect' })).not.toContain(publisher)
+  })
+  it('gives electron-builder the sign mode and dir, with its build cache off, only when signing', () => {
+    expect(builderEnv(undefined, '', { PATH: 'p' })).toBeUndefined()
+    expect(builderEnv('collect', 'C:/s', { PATH: 'p' })).toEqual({ PATH: 'p', AURORA_SIGN_MODE: 'collect', AURORA_SIGN_DIR: 'C:/s', ELECTRON_BUILDER_DISABLE_BUILD_CACHE: 'true' })
+    expect(builderEnv('apply', 'C:/s', {})).toMatchObject({ AURORA_SIGN_MODE: 'apply', ELECTRON_BUILDER_DISABLE_BUILD_CACHE: 'true' })
+  })
+  it('empties to-sign before a collect pass, so nothing stale is sent for signing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'aurora-sign-'))
+    try {
+      mkdirSync(join(dir, 'to-sign'))
+      writeFileSync(join(dir, 'to-sign', 'stale-old.exe'), 'x')
+      resetToSign(dir)
+      expect(readdirSync(join(dir, 'to-sign'))).toEqual([])
+      rmSync(join(dir, 'to-sign'), { recursive: true })
+      resetToSign(dir)
+      expect(existsSync(join(dir, 'to-sign'))).toBe(true)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
   })
   it('limits a local run to the requested arches, naming the targets so electron-builder honours the arch flags', () => {
     const std = builderArgs({ platform: 'win32', variant: 'standard', signed: false })

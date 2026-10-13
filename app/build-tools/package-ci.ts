@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { readdirSync } from 'node:fs'
+import { mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9,6 +9,8 @@ import { REPO_ROOT } from './versions.ts'
 type Platform = 'win32' | 'darwin' | 'linux'
 type Arch = 'x64' | 'arm64'
 export type SignMode = 'collect' | 'apply'
+/** The publisher SignPath signs as. Only signed builds carry it: electron-updater rejects updates from anyone else. */
+export const SIGNPATH_PUBLISHER = 'SignPath Foundation'
 export const TRIPLES: Record<Platform, { x64: string; arm64: string }> = {
   win32: { x64: 'x86_64-pc-windows-msvc', arm64: 'aarch64-pc-windows-msvc' },
   darwin: { x64: 'x86_64-apple-darwin', arm64: 'aarch64-apple-darwin' },
@@ -20,14 +22,33 @@ const PORTABLE: Record<Platform, string> = { win32: 'zip', darwin: 'zip', linux:
 const YML_TARGETS: Record<Platform, string[]> = { win32: ['nsis', 'zip'], darwin: ['dmg', 'zip'], linux: ['AppImage', 'deb', 'rpm'] }
 const ARCH_FLAGS = ['--x64', '--arm64']
 
-/** In the `collect` signing pass only the standard NSIS installer is built: it contains every file electron-builder signs. */
+/**
+ * In the `collect` signing pass only the standard NSIS installer is built: it contains every file electron-builder signs.
+ * The `apply` pass builds what an unsigned run builds, plus the publisher electron-updater will require of updates.
+ */
 export function builderArgs(o: { platform: Platform; variant: 'standard' | 'nofdk'; signed: boolean; signMode?: SignMode }): string[] {
   if (o.signMode === 'collect') return ['--win', 'nsis', '--x64', '--arm64', '--publish', 'never']
   const args = o.variant === 'standard'
     ? [FLAG[o.platform], '--x64', '--arm64', '--publish', 'never']
     : [FLAG[o.platform], PORTABLE[o.platform], '--x64', '--arm64', '--publish', 'never', '-c.directories.output=dist-nofdk', '-c.artifactName=${productName}-${version}-${os}-${arch}-nofdk.${ext}']
   if (o.platform === 'darwin' && !o.signed) args.push('-c.mac.identity=-') // ad-hoc: arm64 macOS refuses unsigned code
+  if (o.signMode === 'apply') args.push(`-c.win.signtoolOptions.publisherName=${SIGNPATH_PUBLISHER}`)
   return args
+}
+
+/**
+ * electron-builder's environment in a signing pass. The build cache is off: on a machine with a certificate it could
+ * restore an unsigned Aurora.exe in the apply pass without calling the sign hook.
+ */
+export function builderEnv(signMode: SignMode | undefined, signDir: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv | undefined {
+  if (!signMode) return undefined
+  return { ...env, AURORA_SIGN_MODE: signMode, AURORA_SIGN_DIR: signDir, ELECTRON_BUILDER_DISABLE_BUILD_CACHE: 'true' }
+}
+
+/** Empties <signDir>/to-sign before a collect pass, so files from an earlier run are never sent for signing. */
+export function resetToSign(signDir: string): void {
+  rmSync(join(signDir, 'to-sign'), { recursive: true, force: true })
+  mkdirSync(join(signDir, 'to-sign'), { recursive: true })
 }
 
 /**
@@ -75,14 +96,17 @@ function cli(): number {
   const sh = process.platform === 'win32'
   const node = (script: string, ...a: string[]) => execFileSync(process.execPath, [join(app, 'build-tools', script), ...a], { stdio: 'inherit' })
   const npx = (...a: string[]) => execFileSync('npx', a, { cwd: app, stdio: 'inherit', shell: sh })
-  const signEnv = signMode ? { ...process.env, AURORA_SIGN_MODE: signMode, AURORA_SIGN_DIR: signDir } : undefined
-  const builder = (args: string[]) => execFileSync('npx', ['electron-builder', ...limitArches(args, platform, arches)], { cwd: app, stdio: 'inherit', shell: sh, env: signEnv })
+  const env = builderEnv(signMode, signDir, process.env)
+  // With a shell, arguments are joined unescaped: quote the ones with spaces (the SignPath publisher).
+  const quote = (a: string) => (sh && a.includes(' ') ? `"${a}"` : a)
+  const builder = (args: string[]) => execFileSync('npx', ['electron-builder', ...limitArches(args, platform, arches).map(quote)], { cwd: app, stdio: 'inherit', shell: sh, env })
   const exe = platform === 'win32' ? 'aurora-engine.exe' : 'aurora-engine'
   const engine = (arch: Arch, variant: string) => join(REPO_ROOT, 'engines', arch, variant, exe)
   const targets = Object.values(TRIPLES[platform]).flatMap((t) => ['--target', t])
   const signCache = createRequire(import.meta.url)('./signCache.cjs') as { collect(file: string, dir: string): string; signedCopy(file: string, dir: string): string | null }
   npx('electron-vite', 'build')
   if (signMode === 'collect') {
+    resetToSign(signDir)
     for (const arch of arches) stageEngine({ src: engine(arch, 'standard'), appRoot: app, platform, arch })
     for (const variant of ['standard', 'nofdk'] as const) for (const arch of arches) signCache.collect(engine(arch, variant), join(signDir, 'to-sign'))
     node('licenses.ts', ...targets)
