@@ -27,39 +27,57 @@ export function audioFilesFromArgv(argv: readonly string[], o: { isPackaged: boo
 type OpenMethod = 'queue.setPaths' | 'player.play'
 
 /**
- * Plays files handed to Aurora by the OS. Files arriving close together (a multi-select Open with
- * launches the app once per file on some systems) join one queue, and files arriving before the
- * engine is ready are held until it is.
+ * Plays files handed to Aurora by the OS. Files arriving close together join one queue (Windows starts
+ * one process per file of a multi-select Open, so they can trickle in over a second or more): each open
+ * restarts the batch timer, but a batch never waits longer than maxBatchMs for its first file. Files
+ * arriving before the engine is ready are held until it is, and files caught by an engine restart
+ * mid-flush are put back.
  */
 export function createFileOpener(o: {
   call: (method: OpenMethod, params: object) => Promise<unknown>
   batchMs?: number
+  maxBatchMs?: number
   setTimer?: (fn: () => void, ms: number) => unknown
+  now?: () => number
   onOpen?: () => void
+  onError?: (e: unknown) => void
 }): { open(paths: string[]): void; engineReady(): void; engineLost(): void } {
   const setTimer = o.setTimer ?? ((fn, ms) => setTimeout(fn, ms))
+  const now = o.now ?? Date.now
+  const batchMs = o.batchMs ?? 250
+  const maxBatchMs = o.maxBatchMs ?? 2000
   let pending: string[] = []
   let ready = false
-  let timer = false
+  let lost = 0 // counts engineLost() calls, to notice a restart during a flush
+  let batchStart: number | null = null
+  let token = 0 // only the newest timer acts; older ones were superseded by a later open()
 
   async function flush(): Promise<void> {
     const paths = pending
     pending = []
+    const lostBefore = lost
     try {
       await o.call('queue.setPaths', { paths, startIndex: 0 })
       await o.call('player.play', {})
       o.onOpen?.()
-    } catch {
-      // The engine went away mid-open; the user can open the file again.
+    } catch (e) {
+      if (!ready || lost !== lostBefore) {
+        pending = [...paths, ...pending] // the engine restarted under us: play them once it is back
+        if (ready) schedule()
+      } else {
+        o.onError?.(e)
+      }
     }
   }
   function schedule(): void {
-    if (timer) return
-    timer = true
+    if (batchStart === null) batchStart = now()
+    const mine = ++token
+    const delay = Math.max(0, Math.min(batchMs, batchStart + maxBatchMs - now()))
     setTimer(() => {
-      timer = false
+      if (mine !== token) return
+      batchStart = null
       if (ready && pending.length > 0) void flush()
-    }, o.batchMs ?? 250)
+    }, delay)
   }
 
   return {
@@ -72,6 +90,6 @@ export function createFileOpener(o: {
       ready = true
       if (pending.length > 0) schedule()
     },
-    engineLost() { ready = false },
+    engineLost() { ready = false; lost++ },
   }
 }

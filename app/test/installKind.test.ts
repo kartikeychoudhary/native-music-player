@@ -41,10 +41,18 @@ describe('install kind', () => {
     expect(pkg.author?.name).toBeTruthy()
     expect(pkg.author?.email).toBeTruthy()
   })
-  it('associates every audio extension Aurora plays, and nothing else', () => {
-    const yml = parse(readFileSync(join(__dirname, '../electron-builder.yml'), 'utf8')) as { fileAssociations?: { ext: string[]; role?: string }[] }
+  it('associates the audio extensions Aurora plays, except .mp4 (usually video), under its own class', () => {
+    const yml = parse(readFileSync(join(__dirname, '../electron-builder.yml'), 'utf8')) as { fileAssociations?: { ext: string[]; name?: string; role?: string; mimeType?: unknown }[] }
     expect(yml.fileAssociations).toHaveLength(1)
-    expect(yml.fileAssociations![0].ext).toEqual([...AUDIO_EXTENSIONS])
+    expect(yml.fileAssociations![0].ext).toEqual(AUDIO_EXTENSIONS.filter((e) => e !== 'mp4'))
     expect(yml.fileAssociations![0].role).toBe('Viewer')
+    // The name becomes the Windows class HKCU\Software\Classes\<name>, which the uninstaller deletes whole.
+    expect(yml.fileAssociations![0].name).toBe('Aurora.Audio')
+  })
+  it('gives Linux its MIME types through linux.mimeTypes, never the per-association string that writes malformed MIME XML', () => {
+    const yml = parse(readFileSync(join(__dirname, '../electron-builder.yml'), 'utf8')) as { fileAssociations: { mimeType?: unknown }[]; linux: { mimeTypes?: unknown } }
+    for (const a of yml.fileAssociations) expect(a).not.toHaveProperty('mimeType')
+    expect(Array.isArray(yml.linux.mimeTypes)).toBe(true)
+    expect(yml.linux.mimeTypes as string[]).toContain('audio/flac')
   })
 })

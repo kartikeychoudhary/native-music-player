@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell, webContents } from 'electron'
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { PROTOCOL_VERSION } from '@protocol/ProtocolVersion'
@@ -63,7 +63,8 @@ const hookedSenders = new Set<number>()
 // Audio files the OS hands us: on the command line at start-up (double-click, Open with), through a second
 // launch's argv, or (macOS) an open-file event. Everything funnels through openFromOs; paths that arrive
 // before whenReady has built the opener wait in pendingOpen.
-const fromArgv = (argv: readonly string[], cwd: string) => audioFilesFromArgv(argv, { isPackaged: app.isPackaged, cwd, exists: existsSync })
+const isFile = (p: string) => statSync(p, { throwIfNoEntry: false })?.isFile() === true
+const fromArgv = (argv: readonly string[], cwd: string) => audioFilesFromArgv(argv, { isPackaged: app.isPackaged, cwd, exists: isFile })
 /** The audio files this process was launched with (the update resumer needs to know whether there were any). */
 const startupFiles = fromArgv(process.argv, process.cwd())
 let opener: ReturnType<typeof createFileOpener> | undefined
@@ -77,7 +78,7 @@ app.on('second-instance', (_e, argv, workingDirectory) => {
 // macOS delivers "Open with" and Dock drops here, never through argv. Must be registered before ready.
 app.on('open-file', (e, path) => {
   e.preventDefault()
-  openFromOs(audioFilesFromArgv([process.execPath, path], { isPackaged: true, cwd: process.cwd(), exists: existsSync }))
+  openFromOs(audioFilesFromArgv([process.execPath, path], { isPackaged: true, cwd: process.cwd(), exists: isFile }))
 })
 
 app.whenReady().then(() => {
@@ -115,7 +116,7 @@ app.whenReady().then(() => {
   supervisor.on('frame', (t: number, d: Uint8Array) => viz.frame(t, d))
   supervisor.on('status', (s) => { if (s.state === 'ready') viz.engineReady() })
 
-  const fileOpener = createFileOpener({ call: (m, p) => supervisor.call(m, p), onOpen: () => windows.showMain() })
+  const fileOpener = createFileOpener({ call: (m, p) => supervisor.call(m, p), onOpen: () => windows.showMain(), onError: (e) => engineLog(`[open files] ${String(e)}`) })
   opener = fileOpener
   supervisor.on('status', (s) => { if (s.state === 'ready') fileOpener.engineReady(); else fileOpener.engineLost() })
   fileOpener.open(startupFiles)
