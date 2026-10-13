@@ -47,15 +47,16 @@ describe('Windows file types are registered by installer.nsh, never by electron-
     expect(nsh.replace(list, '')).not.toMatch(/\.(mp3|flac|ogg|opus|m4a)\b/)
   })
   it("never writes an extension default value, which would take over the user's default player", () => {
-    const writes = nsh.split('\n').filter((l) => /^\s*WriteReg\w+\s/.test(l))
+    const writes = nsh.split('\n').filter((l) => /^\s*WriteReg\w+\s/i.test(l))
     expect(writes.length).toBeGreaterThan(8)
     for (const l of writes) {
       // A write to Software\Classes\.<ext> itself (not a subkey) with the default value name "".
-      expect(l, l).not.toMatch(/Software\\Classes\\\.[^"\\]*"\s+""/)
+      expect(l, l).not.toMatch(/Software\\Classes\\\.[^"\\]*"\s+""/i)
     }
-    // The regex above must really catch what electron-builder's APP_ASSOCIATE writes.
-    expect('WriteRegStr SHELL_CONTEXT "Software\\Classes\\.${EXT}" "" "Aurora.Audio"').toMatch(/Software\\Classes\\\.[^"\\]*"\s+""/)
-    expect('WriteRegStr SHELL_CONTEXT "Software\\Classes\\.mp3" "" "Aurora.Audio"').toMatch(/Software\\Classes\\\.[^"\\]*"\s+""/)
+    // The regex above must really catch what electron-builder's APP_ASSOCIATE writes, in any case.
+    expect('WriteRegStr SHELL_CONTEXT "Software\\Classes\\.${EXT}" "" "Aurora.Audio"').toMatch(/Software\\Classes\\\.[^"\\]*"\s+""/i)
+    expect('WriteRegStr SHELL_CONTEXT "Software\\Classes\\.mp3" "" "Aurora.Audio"').toMatch(/Software\\Classes\\\.[^"\\]*"\s+""/i)
+    expect('writeregstr shell_context "SOFTWARE\\CLASSES\\.FLAC" "" "x"').toMatch(/Software\\Classes\\\.[^"\\]*"\s+""/i)
     // And no use of electron-builder's macros that do (comments may name them).
     expect(nsh.replace(/^\s*;.*$/gm, '')).not.toMatch(/APP_ASSOCIATE/)
   })
@@ -72,28 +73,54 @@ describe('Windows file types are registered by installer.nsh, never by electron-
     expect(body).toMatch(/shell\\open\\command" "" `"\$appExe" "%1"`/)
     expect(body).toContain('SHChangeNotify')
   })
-  it('removes exactly what it added on a real uninstall only, and still clears a default that is ours', () => {
+  it('removes its registrations on every uninstall, including the one an update or install-mode switch runs', () => {
     const body = macroBody('customUnInstall')
-    expect(body.indexOf('${ifNot} ${isUpdated}')).toBeGreaterThanOrEqual(0)
-    expect(macroBody('auroraUnregisterExt')).toMatch(/DeleteRegValue SHELL_CONTEXT "Software\\Classes\\\.\$\{EXT\}\\OpenWithProgids" "Aurora\.Audio"/)
-    // An OpenWithProgids key that is left empty (Aurora created it) goes too; one with values never does,
-    // and the extension key itself is never deleted.
     const un = macroBody('auroraUnregisterExt')
-    expect(un).toMatch(/EnumRegValue \$R1 SHELL_CONTEXT "Software\\Classes\\\.\$\{EXT\}\\OpenWithProgids" 0/)
-    expect(un).toMatch(/EnumRegKey \$R2 SHELL_CONTEXT "Software\\Classes\\\.\$\{EXT\}\\OpenWithProgids" 0/)
-    expect(un.indexOf('EnumRegValue')).toBeGreaterThan(un.indexOf('DeleteRegValue'))
-    expect(un.indexOf('DeleteRegKey SHELL_CONTEXT "Software\\Classes\\.${EXT}\\OpenWithProgids"')).toBeGreaterThan(un.indexOf('EnumRegKey'))
-    expect(un).not.toMatch(/DeleteRegKey SHELL_CONTEXT "Software\\Classes\\\.\$\{EXT\}"/)
-    expect(body).toContain('DeleteRegKey SHELL_CONTEXT "Software\\Classes\\Aurora.Audio"')
-    expect(body).toMatch(/DeleteRegKey SHELL_CONTEXT "Software\\Classes\\Applications\\\$\{APP_EXECUTABLE_FILENAME\}"/)
-    expect(body).toContain('DeleteRegKey SHELL_CONTEXT "Software\\Clients\\Media\\Aurora"')
-    expect(body).toMatch(/DeleteRegValue SHELL_CONTEXT "Software\\RegisteredApplications" "Aurora"/)
-    expect(body).toContain('SHChangeNotify')
+    expect(un).toMatch(/DeleteRegValue SHELL_CONTEXT "Software\\Classes\\\.\$\{EXT\}\\OpenWithProgids" "Aurora\.Audio"/)
+    // An OpenWithProgids key, then the extension key, that this leaves empty goes too (no values, no
+    // subkeys, no default); one that still holds anything stays.
+    expect(un).toMatch(/auroraDeleteKeyIfEmpty "Software\\Classes\\\.\$\{EXT\}\\OpenWithProgids"/)
+    expect(un).toMatch(/auroraDeleteKeyIfEmpty "Software\\Classes\\\.\$\{EXT\}"/)
+    expect(un.indexOf('OpenWithProgids"\n')).toBeLessThan(un.lastIndexOf('auroraDeleteKeyIfEmpty'))
+    expect(un.indexOf('DeleteRegValue')).toBeLessThan(un.indexOf('auroraDeleteKeyIfEmpty'))
+    expect(un.indexOf('auroraDeleteKeyIfEmpty "Software\\Classes\\.${EXT}\\OpenWithProgids"')).toBeLessThan(un.indexOf('auroraDeleteKeyIfEmpty "Software\\Classes\\.${EXT}"'))
+    expect(un).not.toMatch(/DeleteRegKey/)
+    const empty = macroBody('auroraDeleteKeyIfEmpty')
+    expect(empty).toMatch(/EnumRegValue \$R1 SHELL_CONTEXT "\$\{KEY\}" 0/)
+    expect(empty).toMatch(/EnumRegKey \$R2 SHELL_CONTEXT "\$\{KEY\}" 0/)
+    expect(empty).toMatch(/ReadRegStr \$R3 SHELL_CONTEXT "\$\{KEY\}" ""/)
+    expect(empty).toMatch(/\$R1 == ""\s+\$\{andIf\} \$R2 == ""\s+\$\{andIf\} \$R3 == ""\s+DeleteRegKey SHELL_CONTEXT "\$\{KEY\}"/)
+
+    // Placement, by order: [gate 1: clear a default that is ours] [removals] [gate 2: the data prompt].
+    const gate = '${ifNot} ${isUpdated}'
+    const g1 = body.indexOf(gate)
+    const g1End = body.indexOf('${endIf}', g1)
+    const g2 = body.indexOf(gate, g1End)
+    expect(body.match(/\$\{isUpdated\}/g)).toHaveLength(2)
+    expect(g1).toBeGreaterThanOrEqual(0)
+    const clear = body.indexOf('auroraClearDefault')
+    expect(clear).toBeGreaterThan(g1)
+    expect(clear).toBeLessThan(g1End)
+    const removals = [
+      'auroraUnregisterExt',
+      'DeleteRegKey SHELL_CONTEXT "Software\\Classes\\Aurora.Audio"',
+      'DeleteRegKey SHELL_CONTEXT "Software\\Classes\\Applications\\${APP_EXECUTABLE_FILENAME}"',
+      'DeleteRegKey SHELL_CONTEXT "Software\\Clients\\Media\\Aurora"',
+      'DeleteRegValue SHELL_CONTEXT "Software\\RegisteredApplications" "Aurora"',
+      'SHChangeNotify'
+    ]
+    for (const r of removals) {
+      const at = body.indexOf(r)
+      expect(at, r).toBeGreaterThan(g1End) // not inside gate 1 ...
+      expect(at, r).toBeLessThan(g2) // ... nor gate 2, so an update or a mode switch removes them
+    }
+    // The prompt and its deletion are in gate 2, after every removal.
+    expect(body.indexOf('MessageBox')).toBeGreaterThan(g2)
+    expect(body.indexOf('RMDir /r')).toBeGreaterThan(g2)
     // The default is only cleared while it is still Aurora.Audio (left by earlier test builds).
     expect(macroBody('auroraClearDefault')).toMatch(/\$\{if\} \$R0 == "Aurora\.Audio"/)
-    // All of it is in the install's own context, before the one switch to the current user.
-    expect(body.indexOf('auroraClearDefault')).toBeLessThan(body.indexOf('SetShellVarContext current'))
-    expect(body.indexOf('RegisteredApplications')).toBeLessThan(body.indexOf('SetShellVarContext current'))
+    // Everything is in the install's own context, before the one switch to the current user.
+    expect(body.indexOf('SetShellVarContext current')).toBeGreaterThan(g2)
     expect(body.match(/SetShellVarContext current/g)).toHaveLength(1)
     expect(body.match(/SetShellVarContext all/g)).toHaveLength(1)
     expect(body.indexOf('SetShellVarContext all')).toBeGreaterThan(body.indexOf('RMDir /r'))

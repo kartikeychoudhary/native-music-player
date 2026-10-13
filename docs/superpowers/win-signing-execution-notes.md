@@ -48,7 +48,8 @@ None was judged a blocker by the final review.
 electron-builder's `APP_ASSOCIATE` wrote `Software\Classes\.<ext>` (default) = `Aurora.Audio` at install, which made Aurora the default player for users with classic registry associations (it replaced VLC's on the dev machine) and could not be undone.
 - **Now:** `fileAssociations` is under `mac` only. `app/build/installer.nsh` registers Windows types itself: the `Aurora.Audio` ProgID, `OpenWithProgids`, `Applications\Aurora.exe` (`SupportedTypes`) and the Default apps capabilities (`Clients\Media\Aurora`, `RegisteredApplications`). It never writes an extension default.
 - **Uninstall** removes exactly those entries, plus any `.ext` default that an earlier test build left pointing at `Aurora.Audio`.
-- **Proof:** a silent install and uninstall of the packaged installer left every `.ext` default identical, and the registry identical to before after the uninstall.
+- **Registrations are removed on every uninstall,** including the silent one an update or an install-mode switch runs, so a per-machine install replacing a per-user one leaves no stale HKCU entries. Only a real uninstall clears an `.ext` default that is ours and asks the data question.
+- **Proof (per-user only):** a silent per-user install and uninstall of the packaged installer left every `.ext` default identical, and the registry identical to before after the uninstall. Per-machine was not exercised.
 
 ## Pending human checks
 
@@ -59,5 +60,7 @@ electron-builder's `APP_ASSOCIATE` wrote `Software\Classes\.<ext>` (default) = `
    - double-click once Aurora is the default app;
    - an update with music playing resumes.
 2. **Per-machine uninstall answering Yes:** check that the HKLM uninstall entry and associations are removed. The executor couldn't do an admin install.
+   - Also check a per-machine install and uninstall end to end: the `Aurora.Audio`, `Applications\Aurora.exe` and `Clients\Media\Aurora` keys and the `RegisteredApplications` value under HKLM appear on install and are gone after uninstall, and no `.ext` default changed.
+   - Also check switching a per-user install to per-machine: no Aurora registrations remain under HKCU afterwards, and Aurora is still listed under Open with and Default apps.
 3. **Linux "Open with" from Nautilus/Dolphin:** check that it plays the file (`%F`, `file://` decoding).
 4. **If signing is switched on later:** run a SignPath dry run (`workflow_dispatch`, test-signing) to confirm the artifact configurations (`<zip-file><pe-file-set>`) and `check-signatures.ps1` under `pwsh` 7.

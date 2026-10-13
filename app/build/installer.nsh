@@ -35,24 +35,33 @@
   WriteRegStr SHELL_CONTEXT "Software\Clients\Media\Aurora\Capabilities\FileAssociations" ".${EXT}" "Aurora.Audio"
 !macroend
 
-!macro auroraUnregisterExt EXT
-  DeleteRegValue SHELL_CONTEXT "Software\Classes\.${EXT}\OpenWithProgids" "Aurora.Audio"
-  ; Drop the OpenWithProgids key too if that left it empty (Aurora created it); one that still holds
-  ; other programs' entries stays. The extension key itself is never deleted.
+; Deletes a key only when it has no values, no subkeys and no (Default) value.
+!macro auroraDeleteKeyIfEmpty KEY
   ClearErrors
-  EnumRegValue $R1 SHELL_CONTEXT "Software\Classes\.${EXT}\OpenWithProgids" 0
+  EnumRegValue $R1 SHELL_CONTEXT "${KEY}" 0
   ${if} ${Errors}
     StrCpy $R1 ""
   ${endIf}
   ClearErrors
-  EnumRegKey $R2 SHELL_CONTEXT "Software\Classes\.${EXT}\OpenWithProgids" 0
+  EnumRegKey $R2 SHELL_CONTEXT "${KEY}" 0
   ${if} ${Errors}
     StrCpy $R2 ""
   ${endIf}
+  ClearErrors
+  ReadRegStr $R3 SHELL_CONTEXT "${KEY}" ""
   ${if} $R1 == ""
   ${andIf} $R2 == ""
-    DeleteRegKey SHELL_CONTEXT "Software\Classes\.${EXT}\OpenWithProgids"
+  ${andIf} $R3 == ""
+    DeleteRegKey SHELL_CONTEXT "${KEY}"
   ${endIf}
+!macroend
+
+!macro auroraUnregisterExt EXT
+  DeleteRegValue SHELL_CONTEXT "Software\Classes\.${EXT}\OpenWithProgids" "Aurora.Audio"
+  ; Then the OpenWithProgids key and the extension key, if that left them empty (Aurora created them).
+  ; A key that still holds anything stays.
+  !insertmacro auroraDeleteKeyIfEmpty "Software\Classes\.${EXT}\OpenWithProgids"
+  !insertmacro auroraDeleteKeyIfEmpty "Software\Classes\.${EXT}"
 !macroend
 
 ; Earlier test builds wrote Aurora.Audio as the extension default (and electron-builder's uninstall left
@@ -88,21 +97,28 @@
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
 !macroend
 
-; On a real uninstall (never during an update, which runs the old uninstaller silently and then
-; re-registers, and never in silent mode) remove what customInstall added, and offer to remove Aurora's
-; library, playlists, settings and cover cache as well. Music files are never touched.
+; Every uninstall, including the silent one an update or an install-mode switch runs (a per-machine
+; install replacing a per-user one runs the old per-user uninstaller with --updated), removes what
+; customInstall added, so stale registrations never outlive the exe they point at. A normal update
+; re-registers right afterwards, because the install section runs customInstall after the old version is
+; uninstalled. Only a real uninstall (never an update, never silent) clears an extension default that is
+; ours, which an update must not undo, and offers to remove Aurora's library, playlists, settings and
+; cover cache. Music files are never touched.
 !macro customUnInstall
+  ; This runs in the install's shell context (all users for a per-machine install), where the
+  ; registrations were written, so all of it is done before the context is switched below.
   ${ifNot} ${isUpdated}
-    ; This runs in the install's shell context (all users for a per-machine install), where the
-    ; registrations were written, so they are removed before the context is switched below.
-    !insertmacro auroraForEachExt auroraUnregisterExt
     !insertmacro auroraForEachExt auroraClearDefault
-    DeleteRegKey SHELL_CONTEXT "Software\Classes\Aurora.Audio"
-    DeleteRegKey SHELL_CONTEXT "Software\Classes\Applications\${APP_EXECUTABLE_FILENAME}"
-    DeleteRegKey SHELL_CONTEXT "Software\Clients\Media\Aurora"
-    DeleteRegValue SHELL_CONTEXT "Software\RegisteredApplications" "Aurora"
-    System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+  ${endIf}
 
+  !insertmacro auroraForEachExt auroraUnregisterExt
+  DeleteRegKey SHELL_CONTEXT "Software\Classes\Aurora.Audio"
+  DeleteRegKey SHELL_CONTEXT "Software\Classes\Applications\${APP_EXECUTABLE_FILENAME}"
+  DeleteRegKey SHELL_CONTEXT "Software\Clients\Media\Aurora"
+  DeleteRegValue SHELL_CONTEXT "Software\RegisteredApplications" "Aurora"
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+
+  ${ifNot} ${isUpdated}
     MessageBox MB_YESNO|MB_ICONQUESTION "Also delete your Aurora library, playlists, settings and cover cache?$\r$\n$\r$\nYour music files are not touched." /SD IDNO IDNO aurora_keep_data
       ; Electron's data is always per user. The rest of the uninstall section uses SHELL_CONTEXT for the
       ; uninstall key and associations, so the context goes back afterwards (as electron-builder's own
