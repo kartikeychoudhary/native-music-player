@@ -9,7 +9,7 @@ import { REPO_ROOT } from './versions.ts'
 type Platform = 'win32' | 'darwin' | 'linux'
 type Arch = 'x64' | 'arm64'
 export type SignMode = 'collect' | 'apply'
-/** The publisher SignPath signs as. Only signed builds carry it: electron-updater rejects updates from anyone else. */
+/** The publisher SignPath signs as. Only release-signed builds carry it: electron-updater rejects updates from anyone else. */
 export const SIGNPATH_PUBLISHER = 'SignPath Foundation'
 export const TRIPLES: Record<Platform, { x64: string; arm64: string }> = {
   win32: { x64: 'x86_64-pc-windows-msvc', arm64: 'aarch64-pc-windows-msvc' },
@@ -24,15 +24,16 @@ const ARCH_FLAGS = ['--x64', '--arm64']
 
 /**
  * In the `collect` signing pass only the standard NSIS installer is built: it contains every file electron-builder signs.
- * The `apply` pass builds what an unsigned run builds, plus the publisher electron-updater will require of updates.
+ * The `apply` pass builds what an unsigned run builds. With `releaseSigned` (the release-signing policy, not a test-signed
+ * build) it also sets the publisher electron-updater will require of updates, so a test-signed build never carries it.
  */
-export function builderArgs(o: { platform: Platform; variant: 'standard' | 'nofdk'; signed: boolean; signMode?: SignMode }): string[] {
+export function builderArgs(o: { platform: Platform; variant: 'standard' | 'nofdk'; signed: boolean; signMode?: SignMode; releaseSigned?: boolean }): string[] {
   if (o.signMode === 'collect') return ['--win', 'nsis', '--x64', '--arm64', '--publish', 'never']
   const args = o.variant === 'standard'
     ? [FLAG[o.platform], '--x64', '--arm64', '--publish', 'never']
     : [FLAG[o.platform], PORTABLE[o.platform], '--x64', '--arm64', '--publish', 'never', '-c.directories.output=dist-nofdk', '-c.artifactName=${productName}-${version}-${os}-${arch}-nofdk.${ext}']
   if (o.platform === 'darwin' && !o.signed) args.push('-c.mac.identity=-') // ad-hoc: arm64 macOS refuses unsigned code
-  if (o.signMode === 'apply') args.push(`-c.win.signtoolOptions.publisherName=${SIGNPATH_PUBLISHER}`)
+  if (o.signMode === 'apply' && o.releaseSigned) args.push(`-c.win.signtoolOptions.publisherName=${SIGNPATH_PUBLISHER}`)
   return args
 }
 
@@ -78,16 +79,18 @@ export function engineToStage(o: { src: string; name: string; signMode?: SignMod
 }
 
 function cli(): number {
-  const usage = 'usage: package-ci.ts --platform win32|darwin|linux [--signed] [--sign-mode collect|apply --sign-dir <dir>]'
+  const usage = 'usage: package-ci.ts --platform win32|darwin|linux [--signed] [--sign-mode collect|apply --sign-dir <dir> [--release-signed]]'
   const arg = (n: string) => { const i = process.argv.indexOf(`--${n}`); return i > 0 ? process.argv[i + 1] : undefined }
   const platform = process.argv[process.argv.indexOf('--platform') + 1] as Platform
   if (!(platform in TRIPLES)) { console.error(usage); return 2 }
   const signed = process.argv.includes('--signed')
   const signing = process.argv.includes('--sign-mode') || process.argv.includes('--sign-dir')
+  const releaseSigned = process.argv.includes('--release-signed')
   const signMode = arg('sign-mode') as SignMode | undefined
   const signDirArg = arg('sign-dir')
   if (signing && platform !== 'win32') { console.error('package-ci.ts: --sign-mode and --sign-dir are Windows only'); return 2 }
   if (signing && ((signMode !== 'collect' && signMode !== 'apply') || !signDirArg || signDirArg.startsWith('--'))) { console.error(usage); return 2 }
+  if (releaseSigned && signMode !== 'apply') { console.error('package-ci.ts: --release-signed needs --sign-mode apply'); return 2 }
   const signDir = signDirArg ? resolve(signDirArg) : ''
   // Test-only knob for local runs: AURORA_CI_ARCHES=x64 builds one arch. CI always builds both.
   const arches = (process.env.AURORA_CI_ARCHES ?? 'x64,arm64').split(',').map((a) => a.trim()) as Arch[]
@@ -121,7 +124,7 @@ function cli(): number {
       for (const arch of arches) stageEngine({ src: staged(arch, variant), appRoot: app, platform, arch })
       node('licenses.ts', ...targets, ...(variant === 'nofdk' ? ['--no-fdk'] : []))
       node('build-info.ts', '--variant', variant, ...(platform === 'darwin' && signed ? ['--mac-signed'] : []))
-      builder(builderArgs({ platform, variant, signed, signMode }))
+      builder(builderArgs({ platform, variant, signed, signMode, releaseSigned }))
     }
   }
   return 0

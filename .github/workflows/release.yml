@@ -102,7 +102,9 @@ jobs:
           - { runner: macos-15, os: macos, platform: darwin, exe: dist/mac-arm64/Aurora.app/Contents/MacOS/Aurora, exe_nofdk: dist-nofdk/mac-arm64/Aurora.app/Contents/MacOS/Aurora }
           - { runner: ubuntu-22.04, os: linux, platform: linux, exe: dist/linux-unpacked/aurora, exe_nofdk: dist-nofdk/linux-unpacked/aurora }
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    # Windows release signing waits for two human approvals (SignPath waits up to 90 minutes each) around three
+    # electron-builder runs; 360 is the hosted-runner limit.
+    timeout-minutes: ${{ matrix.os == 'windows' && 330 || 60 }}
     defaults: { run: { shell: bash } }
     steps:
       - uses: actions/checkout@v5
@@ -147,7 +149,7 @@ jobs:
       - id: unsigned-binaries
         if: matrix.os == 'windows' && vars.SIGNPATH_ORGANIZATION_ID != ''
         uses: actions/upload-artifact@v4
-        with: { name: windows-binaries-unsigned, path: sign/to-sign/, if-no-files-found: error }
+        with: { name: windows-binaries-unsigned, path: sign/to-sign/, if-no-files-found: error, overwrite: true }
       - name: Sign the binaries (SignPath)
         if: matrix.os == 'windows' && vars.SIGNPATH_ORGANIZATION_ID != ''
         uses: signpath/github-action-submit-signing-request@v3
@@ -159,11 +161,15 @@ jobs:
           artifact-configuration-slug: binaries
           github-artifact-id: '${{ steps.unsigned-binaries.outputs.artifact-id }}'
           wait-for-completion: true
-          wait-for-completion-timeout-in-seconds: 7200 # release signing waits for a human approval
+          wait-for-completion-timeout-in-seconds: 5400 # release signing waits for a human approval
           output-artifact-directory: sign/signed
+      # The SignPath publisher goes into app-update.yml only for release-signed builds (tag pushes, the
+      # release-signing policy). A test-signed build must not carry it: electron-updater would reject every update.
       - name: Package with the signed binaries
         if: matrix.os == 'windows' && vars.SIGNPATH_ORGANIZATION_ID != ''
-        run: node app/build-tools/package-ci.ts --platform win32 --sign-mode apply --sign-dir sign
+        run: |
+          release="${{ github.event_name == 'push' && '--release-signed' || '' }}"
+          node app/build-tools/package-ci.ts --platform win32 --sign-mode apply --sign-dir sign $release
       - name: Check every app binary is signed
         if: matrix.os == 'windows' && vars.SIGNPATH_ORGANIZATION_ID != ''
         shell: pwsh
@@ -171,7 +177,7 @@ jobs:
       - id: unsigned-installer
         if: matrix.os == 'windows' && vars.SIGNPATH_ORGANIZATION_ID != ''
         uses: actions/upload-artifact@v4
-        with: { name: windows-installer-unsigned, path: 'app/dist/*-win-setup.exe', if-no-files-found: error }
+        with: { name: windows-installer-unsigned, path: 'app/dist/*-win-setup.exe', if-no-files-found: error, overwrite: true }
       - name: Sign the installer (SignPath)
         if: matrix.os == 'windows' && vars.SIGNPATH_ORGANIZATION_ID != ''
         uses: signpath/github-action-submit-signing-request@v3
@@ -183,7 +189,7 @@ jobs:
           artifact-configuration-slug: installer
           github-artifact-id: '${{ steps.unsigned-installer.outputs.artifact-id }}'
           wait-for-completion: true
-          wait-for-completion-timeout-in-seconds: 7200 # release signing waits for a human approval
+          wait-for-completion-timeout-in-seconds: 5400 # release signing waits for a human approval
           output-artifact-directory: sign/installer
       - name: Use the signed installer and refresh latest.yml
         if: matrix.os == 'windows' && vars.SIGNPATH_ORGANIZATION_ID != ''

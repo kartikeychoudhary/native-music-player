@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -21,14 +22,25 @@ describe('CI packaging arguments', () => {
   it('the collect pass builds only the standard NSIS installer (both arches), to gather every file to sign', () => {
     expect(builderArgs({ platform: 'win32', variant: 'standard', signed: false, signMode: 'collect' })).toEqual(['--win', 'nsis', '--x64', '--arm64', '--publish', 'never'])
   })
-  it('the apply pass builds what an unsigned run builds, plus the SignPath publisher for electron-updater', () => {
+  it('the apply pass builds what an unsigned run builds; only a release-signed one adds the SignPath publisher', () => {
     const publisher = `-c.win.signtoolOptions.publisherName=${SIGNPATH_PUBLISHER}`
     expect(SIGNPATH_PUBLISHER).toBe('SignPath Foundation')
     for (const variant of ['standard', 'nofdk'] as const) {
-      expect(builderArgs({ platform: 'win32', variant, signed: false, signMode: 'apply' })).toEqual([...builderArgs({ platform: 'win32', variant, signed: false }), publisher])
-      expect(builderArgs({ platform: 'win32', variant, signed: false })).not.toContain(publisher)
+      const plain = builderArgs({ platform: 'win32', variant, signed: false })
+      expect(builderArgs({ platform: 'win32', variant, signed: false, signMode: 'apply' })).toEqual(plain) // test-signed: no publisher
+      expect(builderArgs({ platform: 'win32', variant, signed: false, signMode: 'apply', releaseSigned: false })).toEqual(plain)
+      expect(builderArgs({ platform: 'win32', variant, signed: false, signMode: 'apply', releaseSigned: true })).toEqual([...plain, publisher])
+      expect(plain).not.toContain(publisher)
+      expect(builderArgs({ platform: 'win32', variant, signed: false, releaseSigned: true })).not.toContain(publisher) // needs the apply pass
     }
-    expect(builderArgs({ platform: 'win32', variant: 'standard', signed: false, signMode: 'collect' })).not.toContain(publisher)
+    expect(builderArgs({ platform: 'win32', variant: 'standard', signed: false, signMode: 'collect', releaseSigned: true })).not.toContain(publisher)
+  })
+  it('--release-signed is rejected outside the apply pass', () => {
+    for (const extra of [[], ['--sign-mode', 'collect', '--sign-dir', 'x']]) {
+      const r = spawnSync(process.execPath, [join(__dirname, '../build-tools/package-ci.ts'), '--platform', 'win32', ...extra, '--release-signed'], { encoding: 'utf8' })
+      expect(r.status).toBe(2)
+      expect(r.stderr).toContain('--release-signed')
+    }
   })
   it('gives electron-builder the sign mode and dir, with its build cache off, only when signing', () => {
     expect(builderEnv(undefined, '', { PATH: 'p' })).toBeUndefined()

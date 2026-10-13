@@ -67,15 +67,47 @@ describe('release workflow', () => {
     const unsigned = steps.find((s) => s.name === 'Package')! as { if?: string }
     expect(unsigned.if).toContain("vars.SIGNPATH_ORGANIZATION_ID == ''")
   })
-  it('finalizes latest.yml after the installer is signed and checks the publisher on release builds', () => {
-    const runs = wf.jobs.package.steps.map((s) => s.run ?? '').join('\n')
-    expect(runs).toContain('finalize-windows.ts')
-    expect(runs).toMatch(/check-signatures\.ps1[^\n]*-Publisher 'SignPath Foundation'/)
-    const order = (needle: string) => wf.jobs.package.steps.findIndex((s) => (s.run ?? '').includes(needle) || JSON.stringify(s.with ?? {}).includes(needle))
-    expect(order('--sign-mode collect')).toBeLessThan(order('binaries'))
-    expect(order('binaries')).toBeLessThan(order('--sign-mode apply'))
-    expect(order('--sign-mode apply')).toBeLessThan(order('"installer"'))
-    expect(order('"installer"')).toBeLessThan(order('finalize-windows.ts'))
+  it('runs the Windows signing steps in order, from collect to the smoke tests', () => {
+    const steps = wf.jobs.package.steps
+    const slug = (v: string) => steps.findIndex((s) => s.uses?.startsWith('signpath/') && s.with?.['artifact-configuration-slug'] === v)
+    const named = (n: string) => steps.findIndex((s) => s.name === n)
+    const idx = {
+      collect: steps.findIndex((s) => (s.run ?? '').includes('--sign-mode collect')),
+      signBinaries: slug('binaries'),
+      apply: steps.findIndex((s) => (s.run ?? '').includes('--sign-mode apply')),
+      checkBinaries: named('Check every app binary is signed'),
+      signInstaller: slug('installer'),
+      finalize: steps.findIndex((s) => (s.run ?? '').includes('finalize-windows.ts')),
+      checkInstaller: named('Check the installer signature'),
+      smoke: steps.findIndex((s) => (s.run ?? '').includes('e2e:packaged')),
+      collectFiles: named('Collect release files'),
+    }
+    for (const [k, v] of Object.entries(idx)) expect(v, k).toBeGreaterThanOrEqual(0)
+    expect(Object.values(idx)).toEqual([...Object.values(idx)].sort((x, y) => x - y))
+    expect(new Set(Object.values(idx)).size).toBe(Object.values(idx).length)
+    expect(steps[idx.checkInstaller].run).toMatch(/check-signatures\.ps1[^\n]*-Publisher 'SignPath Foundation'/)
+  })
+  it('puts the SignPath publisher only in release-signed (tag push) builds', () => {
+    const apply = wf.jobs.package.steps.find((s) => (s.run ?? '').includes('--sign-mode apply'))!
+    expect(apply.run).toContain('--release-signed')
+    expect(apply.run).toContain("github.event_name == 'push'")
+    expect(wf.jobs.package.steps.filter((s) => (s.run ?? '').includes('--release-signed'))).toHaveLength(1)
+    expect(wf.jobs.package.steps.find((s) => (s.run ?? '').includes('--sign-mode collect'))!.run).not.toContain('--release-signed')
+  })
+  it('keeps the Windows job alive through two SignPath waits and three builds', () => {
+    const timeout = (wf.jobs.package as unknown as { 'timeout-minutes': string })['timeout-minutes']
+    expect(timeout).toBe("${{ matrix.os == 'windows' && 330 || 60 }}")
+    const windows = Number(/&& (\d+) \|\|/.exec(timeout)![1])
+    expect(windows).toBeLessThanOrEqual(360) // GitHub-hosted runner limit
+    const waits = wf.jobs.package.steps.filter((s) => s.uses?.startsWith('signpath/')).map((s) => Number(s.with!['wait-for-completion-timeout-in-seconds']))
+    expect(waits).toHaveLength(2)
+    for (const w of waits) expect(w).toBe(5400)
+    expect(windows).toBeGreaterThanOrEqual((2 * Math.max(...waits)) / 60 + 60)
+  })
+  it('re-uploads the unsigned artifacts on a re-run', () => {
+    const ups = wf.jobs.package.steps.filter((s) => s.uses?.startsWith('actions/upload-artifact') && String(s.with?.name).endsWith('-unsigned'))
+    expect(ups).toHaveLength(2)
+    for (const u of ups) expect(u.with!.overwrite).toBe(true)
   })
   it('keeps the artifact configurations next to the workflow', () => {
     for (const slug of ['binaries', 'installer']) expect(existsSync(join(__dirname, `../../.signpath/artifact-configurations/${slug}.xml`))).toBe(true)

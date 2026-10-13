@@ -33,8 +33,8 @@ win:
   # Signing is done by SignPath in CI in two passes (docs/SIGNING.md); build-tools/sign.cjs collects or
   # applies signed copies and does nothing unless AURORA_SIGN_MODE is set. The publisher name is not set
   # here: it goes into app-update.yml, and electron-updater then rejects any update not signed by that
-  # publisher, which would strand an unsigned build's users. package-ci.ts adds it in the signed (apply)
-  # pass only.
+  # publisher, which would strand an unsigned build's users. package-ci.ts adds it in the release-signed
+  # (apply, --release-signed) pass only, never in test-signed builds.
   signtoolOptions:
     sign: build-tools/sign.cjs
     signingHashAlgorithms: [sha256]
