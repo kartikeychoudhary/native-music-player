@@ -9,19 +9,19 @@ A release is a `v*` tag. The Release workflow (`.github/workflows/release.yml`) 
 
 ## Signing secrets (optional)
 
-Add these as repository secrets (Settings, Secrets and variables, Actions) to sign the builds.
+Windows releases are currently unsigned. Signing through SignPath is wired into the workflow but dormant; see `docs/SIGNING.md`.
+
+Add these as repository secrets (Settings, Secrets and variables, Actions) to sign the macOS builds.
 
 | Secret | Value |
 | --- | --- |
-| `WIN_CSC_LINK` | A base64-encoded `.pfx` code-signing certificate, or a URL to one. |
-| `WIN_CSC_KEY_PASSWORD` | The password of that `.pfx`. |
 | `MAC_CSC_LINK` | A base64-encoded `.p12` "Developer ID Application" certificate. |
 | `MAC_CSC_KEY_PASSWORD` | The password of that `.p12`. |
 | `APPLE_ID` | The Apple ID used for notarization. |
 | `APPLE_APP_SPECIFIC_PASSWORD` | An app-specific password for that Apple ID. |
 | `APPLE_TEAM_ID` | The Apple developer team ID. |
 
-Without them the builds are unsigned on Windows (SmartScreen warns on first run) and ad-hoc signed on macOS (the first launch needs **Open Anyway**). Unsigned macOS builds cannot auto-install updates, so they fall back to notify mode: the app tells the user a new version exists and opens the release page. Windows installers update either way.
+Without them the macOS builds are ad-hoc signed (the first launch needs **Open Anyway**), and the Windows builds are unsigned (SmartScreen warns on first run). Unsigned macOS builds cannot auto-install updates, so they fall back to notify mode: the app tells the user a new version exists and opens the release page. Windows installers update either way.
 
 ## Cutting a release
 
@@ -43,6 +43,8 @@ From a clean `main`:
    ```
 
    The `version` job fails the run early if the tag, `app/package.json` and the engine version disagree.
+
+   If SignPath is configured (`docs/SIGNING.md`), the Windows job pauses twice for you to approve a signing request in SignPath: the binaries first, then the installer. It waits up to 90 minutes for each.
 5. Wait for the Release workflow to go green on all six engine targets and all three package jobs, then download the draft release's assets from the Releases page.
 
 ## Manual matrix, before publishing
@@ -64,7 +66,7 @@ And these checks that belong to packaging and updates:
 
 ## Publishing
 
-Edit the draft's release notes (the workflow fills in generated notes), then publish it. The updater sees only published releases, so the draft is the gate: a build that fails the matrix is deleted, not hidden. To test the updater with a prerelease, publish a `vX.Y.Z-rc.N` release as a prerelease. Installed release builds ignore it.
+Edit the draft's release notes (the workflow fills in generated notes), then publish it. If SignPath is configured, only drafts from tag pushes are publishable: a by-hand run is test-signed, and its installers carry a certificate that SmartScreen does not trust. The updater sees only published releases, so the draft is the gate: a build that fails the matrix is deleted, not hidden. To test the updater with a prerelease, publish a `vX.Y.Z-rc.N` release as a prerelease. Installed release builds ignore it.
 
 ## Dry runs
 

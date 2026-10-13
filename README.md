@@ -18,11 +18,13 @@ Download the assets for your system from the [latest release](https://github.com
 
 `SHA256SUMS.txt` lists a checksum for every file.
 
-Installed copies register for audio files: right-click a song and choose Open with, or double-click it once Aurora is its default app. Open files go to the running Aurora, or start it.
+**Open with Aurora.** Installed copies register for the audio formats (not `.mp4`, which is usually video). Double-clicking a file, or choosing Open with Aurora, plays it, including when Aurora is already running.
+
+**Uninstall.** An interactive uninstall asks whether to also delete the library, playlists, settings and cover cache. Updates never ask and never delete anything.
 
 **No-fdk archives.** The files ending in `-nofdk.zip` and `-nofdk.tar.gz` are portable builds without the Fraunhofer FDK AAC decoder, for distributions that treat it as non-free. Everything else works the same, but HE-AAC files report "codec not in this build".
 
-**Windows code signing.** Windows builds are code signed through the [SignPath Foundation](https://signpath.org)'s free programme for open-source projects; see [Code signing policy](#code-signing-policy). Builds made before signing was set up are unsigned: SmartScreen shows "Windows protected your PC", so choose More info, then Run anyway.
+**Unsigned Windows builds.** Windows builds are not code signed yet. SmartScreen shows "Windows protected your PC": choose More info, then Run anyway. Code signing is planned; see [docs/SIGNING.md](docs/SIGNING.md).
 
 **Unsigned macOS builds.** macOS blocks the first launch. Open System Settings, Privacy & Security, and choose Open Anyway. If macOS says the app "is damaged", run `xattr -dr com.apple.quarantine /Applications/Aurora.app` and open it again.
 
@@ -126,7 +128,7 @@ Lyrics come from a sidecar `.lrc` file next to the track (including enhanced wor
 
 ## Updates
 
-Aurora checks GitHub for a new release 10 seconds after it starts and every 6 hours. This is the only network request it makes. Turn it off in Settings → About. Installed Windows builds (setup.exe), AppImages and signed macOS builds download the update in the background and install it when you click **Restart now**, or the next time you quit. The portable zip, deb and rpm packages, unsigned macOS builds and the no-fdk builds only tell you a new version exists and open its release page.
+Aurora checks GitHub for a new release 10 seconds after it starts and every 6 hours. This is the only network request it makes. Turn it off in Settings → About. Installed Windows builds (setup.exe), AppImages and signed macOS builds download the update in the background and install it when you click **Restart now**, or the next time you quit. If music was playing when you click **Restart now**, playback resumes after the update. The portable zip, deb and rpm packages, unsigned macOS builds and the no-fdk builds only tell you a new version exists and open its release page.
 
 ## Protocol
 
@@ -149,18 +151,7 @@ LDAC and similar codecs are Bluetooth transmission codecs, not file formats. Aur
 
 Aurora only shows the active Bluetooth codec where the OS reports it. On Linux it is read from PipeWire. On Windows and macOS there is no public API for it: Aurora detects that the output is a Bluetooth device and shows "Codec not reported by the OS". It never guesses.
 
-## Code signing policy
-
-Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org).
-
-Windows releases are built from this repository's source by the GitHub Actions [Release workflow](.github/workflows/release.yml), and only those builds are submitted for signing. Every signing request is approved by hand.
-
-**Team roles**
-
-- Committers and reviewers: [kartikeychoudhary](https://github.com/kartikeychoudhary)
-- Approvers: [kartikeychoudhary](https://github.com/kartikeychoudhary)
-
-### Privacy policy
+## Privacy policy
 
 Aurora plays your local files and sends no personal data, analytics or telemetry anywhere. It makes one kind of network request: the update check, which asks GitHub's public API for the latest release of this project, and, for installers that update themselves, downloads that release from GitHub. You can turn the check off in Settings → About. Aurora will not transfer any other information to networked systems unless you specifically ask it to.
 
