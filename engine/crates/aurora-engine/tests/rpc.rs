@@ -63,7 +63,12 @@ fn devices_and_state() {
     assert_eq!(st["status"], "stopped");
     assert_eq!(st["mode"], "processed");
     e.call("player.setMode", json!({ "mode": "bitPerfect" }));
-    assert_eq!(e.call("player.state", json!({}))["result"]["mode"], "bitPerfect");
+    // The player thread applies the mode after the call returns, so poll instead of reading once.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while e.call("player.state", json!({}))["result"]["mode"] != "bitPerfect" {
+        assert!(Instant::now() < deadline, "player.state never reported bitPerfect after setMode");
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 #[test]

@@ -30,7 +30,11 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: System packages (macOS)
         if: runner.os == 'macOS'
-        run: brew install cmake ffmpeg
+        # Homebrew's ffmpeg formula no longer builds libvorbis (needed by fixtures/generate.sh); ffmpeg-full
+        # does. It is keg-only, so put its bin directory on PATH for the later steps.
+        run: |
+          brew install cmake ffmpeg-full
+          echo "$(brew --prefix ffmpeg-full)/bin" >> "$GITHUB_PATH"
       - name: System packages (Windows)
         if: runner.os == 'Windows'
         # cmake is already on the Windows runner image; only ffmpeg is missing.
