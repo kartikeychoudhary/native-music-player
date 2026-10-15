@@ -4,7 +4,7 @@ A release is a `v*` tag. The Release workflow (`.github/workflows/release.yml`) 
 
 ## Before the first release
 
-1. **Make the repository public, or fix Actions billing.** The workflow cannot run while the repository is private and Actions billing is blocked. Making the repository public also makes the arm64 runners (`windows-11-arm`, `ubuntu-22.04-arm`) free, and it lets the installed app read releases without a token, which auto-update needs. Until then, installed copies cannot see updates.
+1. **Make the repository public, or fix Actions billing.** The workflow cannot run while the repository is private and Actions billing is blocked. Making the repository public also makes the arm64 runners (`windows-11-arm`, `ubuntu-24.04-arm`) free, and it lets the installed app read releases without a token, which auto-update needs. Until then, installed copies cannot see updates.
 2. **Decide whether to keep the name "Aurora".** The spec treats renaming as cheap until M4, and after the first release it costs users their update path. If you change it, change these together: `productName` and `appId` in `app/electron-builder.yml`, `productName` in `app/package.json`, and `APP_ID` in `app/src/main/appIdentity.ts`. The Windows media flyout, the updater and the uninstall-entry check all key on them. Also update the executable path in the `package` job's matrix (`Aurora.exe`, `Aurora.app`) and the asset names in the README.
 
 ## Signing secrets (optional)
@@ -59,7 +59,7 @@ And these checks that belong to packaging and updates:
 
 - Install with the NSIS installer and play a track. The media flyout shows "Aurora" with its icon.
 - Install the previous release, publish the new draft, and confirm the old app offers the update. It should install it on **Restart now** while music was playing, relaunch, and resume playing the queue.
-- Check that the AppImage, deb and rpm start on Ubuntu 22.04 and on a current Fedora.
+- Check that the AppImage, deb and rpm start on Ubuntu 24.04 and on a current Fedora.
 - Check that the unsigned macOS build opens after **Open Anyway**.
 - Check that the no-fdk build plays FLAC and shows "Not in this build" in About.
 - Run the "Pending human checks" from `docs/superpowers/m3-execution-notes.md`.

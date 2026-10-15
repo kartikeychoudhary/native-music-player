@@ -43,8 +43,8 @@ jobs:
           - { runner: windows-11-arm, target: aarch64-pc-windows-msvc, dir: win32-arm64, os: windows }
           - { runner: macos-15-intel, target: x86_64-apple-darwin, dir: darwin-x64, os: macos }
           - { runner: macos-15, target: aarch64-apple-darwin, dir: darwin-arm64, os: macos }
-          - { runner: ubuntu-22.04, target: x86_64-unknown-linux-gnu, dir: linux-x64, os: linux }
-          - { runner: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, dir: linux-arm64, os: linux }
+          - { runner: ubuntu-24.04, target: x86_64-unknown-linux-gnu, dir: linux-x64, os: linux }
+          - { runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, dir: linux-arm64, os: linux }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     defaults: { run: { shell: bash } }
@@ -100,7 +100,7 @@ jobs:
         include:
           - { runner: windows-2025, os: windows, platform: win32, exe: dist/win-unpacked/Aurora.exe, exe_nofdk: dist-nofdk/win-unpacked/Aurora.exe }
           - { runner: macos-15, os: macos, platform: darwin, exe: dist/mac-arm64/Aurora.app/Contents/MacOS/Aurora, exe_nofdk: dist-nofdk/mac-arm64/Aurora.app/Contents/MacOS/Aurora }
-          - { runner: ubuntu-22.04, os: linux, platform: linux, exe: dist/linux-unpacked/aurora, exe_nofdk: dist-nofdk/linux-unpacked/aurora }
+          - { runner: ubuntu-24.04, os: linux, platform: linux, exe: dist/linux-unpacked/aurora, exe_nofdk: dist-nofdk/linux-unpacked/aurora }
     runs-on: ${{ matrix.runner }}
     # Windows release signing (only when SIGNPATH_ORGANIZATION_ID is set) waits for two human approvals (SignPath
     # waits up to 90 minutes each) around three electron-builder runs; 360 is the hosted-runner limit.
@@ -116,7 +116,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y rpm xvfb
-          # The key is absent or irrelevant on ubuntu-22.04 kernels, and the job must not fail on it.
+          # Ubuntu 24.04 restricts unprivileged user namespaces, which Electron's sandbox needs; never fail on a missing key.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - uses: actions/download-artifact@v4
         with: { pattern: 'engine-${{ matrix.platform }}-*', path: artifacts }

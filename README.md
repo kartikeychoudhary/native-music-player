@@ -30,7 +30,7 @@ Download the assets for your system from the [latest release](https://github.com
 
 **Linux.** The deb and rpm need the PipeWire client library (`libpipewire-0.3`), which current desktop distributions install by default.
 
-**Minimum versions.** macOS 12, Windows 10 1809 or newer (Electron's floor), and glibc 2.35, which means Ubuntu 22.04 or newer.
+**Minimum versions.** macOS 12, Windows 10 1809 or newer (Electron's floor), and glibc 2.39, which means Ubuntu 24.04, Debian 13, Fedora 40 or newer. (The PipeWire client library on older releases is too old for the audio engine.)
 
 ## Prerequisites
 
