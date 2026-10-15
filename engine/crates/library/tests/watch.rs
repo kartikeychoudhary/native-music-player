@@ -29,5 +29,11 @@ fn unwatched_folders_are_silent() {
     w.watch(dir.path()).unwrap();
     w.unwatch(dir.path()).unwrap();
     std::fs::write(dir.path().join("x.flac"), b"x").unwrap();
-    assert!(rx.recv_timeout(Duration::from_millis(1500)).is_err());
+    // FSEvents can still deliver a late event about the folder itself (created just before the watch);
+    // what must not arrive is the change made after unwatching.
+    let deadline = std::time::Instant::now() + Duration::from_millis(1500);
+    while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+        let Ok(batch) = rx.recv_timeout(left) else { break };
+        assert!(!batch.iter().any(|p| p.file_name().is_some_and(|n| n == "x.flac")), "reported {batch:?} after unwatch");
+    }
 }
