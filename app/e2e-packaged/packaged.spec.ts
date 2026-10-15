@@ -1,5 +1,5 @@
 import { _electron as electron, expect, test } from '@playwright/test'
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -26,7 +26,8 @@ test('the packaged app starts its bundled engine, plays a file and shows its bui
   const { AURORA_ENGINE_PATH: _path, AURORA_ENGINE_PROFILE: _profile, ...env } = process.env
   const app = await electron.launch({ executablePath: resolve(exe!), args: [`--user-data-dir=${join(dir, 'userData')}`], env: { ...env, AURORA_OUTPUT: 'null', AURORA_OSMEDIA: '0' } })
   try {
-    expect(await app.evaluate(({ app }) => app.getPath('userData')), 'the smoke test must not touch the real profile').toBe(join(dir, 'userData'))
+    // Real paths: macOS temp dirs live under /var, a symlink to /private/var, and Electron reports the resolved one.
+    expect(realpathSync(await app.evaluate(({ app }) => app.getPath('userData'))), 'the smoke test must not touch the real profile').toBe(realpathSync(join(dir, 'userData')))
     const win = await app.firstWindow()
     type Status = { state: string; message?: string; engine?: { version: string; features: string[] } }
     const status = () => win.evaluate(() => (window as unknown as { aurora: { status: () => Promise<Status> } }).aurora.status())
