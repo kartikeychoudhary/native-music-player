@@ -1,5 +1,5 @@
 import { statSync } from 'node:fs'
-import { isAbsolute, resolve } from 'node:path'
+import { posix, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { AUDIO_EXTENSIONS } from '@shared/api'
 
@@ -23,7 +23,10 @@ function argToPath(arg: string): string | null {
  * The audio files named on a command line (a double-click, "Open with Aurora" or a second launch).
  * Skips the executable, plus the main script when running unpackaged, and anything that is a flag.
  */
-export function audioFilesFromArgv(argv: readonly string[], o: { isPackaged: boolean; cwd: string; exists: (p: string) => boolean }): string[] {
+export function audioFilesFromArgv(argv: readonly string[], o: { isPackaged: boolean; cwd: string; exists: (p: string) => boolean; platform?: string }): string[] {
+  // The path rules are the launching platform's, not the host's (tests feed Windows paths on any OS).
+  const windows = (o.platform ?? process.platform) === 'win32'
+  const { isAbsolute, resolve } = windows ? win32 : posix
   const seen = new Set<string>()
   const out: string[] = []
   for (const arg of argv.slice(o.isPackaged ? 1 : 2)) {
@@ -34,7 +37,7 @@ export function audioFilesFromArgv(argv: readonly string[], o: { isPackaged: boo
     if (dot < 0 || !audio.has(name.slice(dot + 1).toLowerCase())) continue
     const path = isAbsolute(name) ? name : resolve(o.cwd, name)
     // Windows paths are case-insensitive: 'A.mp3' and 'a.MP3' are one file.
-    const key = process.platform === 'win32' ? path.toLowerCase() : path
+    const key = windows ? path.toLowerCase() : path
     if (seen.has(key) || !o.exists(path)) continue
     seen.add(key)
     out.push(path)
