@@ -115,7 +115,8 @@ jobs:
         if: matrix.os == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y rpm xvfb
+          # libpipewire and libasound: the engine links them, and the bare runner image lacks the PipeWire client.
+          sudo apt-get install -y rpm xvfb libpipewire-0.3-0t64 libasound2t64
           # Ubuntu 24.04 restricts unprivileged user namespaces, which Electron's sandbox needs; never fail on a missing key.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - uses: actions/download-artifact@v4
@@ -139,7 +140,8 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          if [ -n "$CSC_LINK" ]; then signed=--signed; else signed=; export CSC_IDENTITY_AUTO_DISCOVERY=false; fi
+          # An absent secret still arrives as an empty CSC_LINK, which electron-builder would try to open as a file.
+          if [ -n "$CSC_LINK" ]; then signed=--signed; else signed=; unset CSC_LINK CSC_KEY_PASSWORD; export CSC_IDENTITY_AUTO_DISCOVERY=false; fi
           node app/build-tools/package-ci.ts --platform ${{ matrix.platform }} $signed
       # Windows signing through SignPath, in two packaging passes (docs/SIGNING.md): collect the files
       # to sign, sign them, build again with the signed copies swapped in, then sign the installer.

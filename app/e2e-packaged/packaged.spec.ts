@@ -1,5 +1,5 @@
 import { _electron as electron, expect, test } from '@playwright/test'
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -28,9 +28,17 @@ test('the packaged app starts its bundled engine, plays a file and shows its bui
   try {
     expect(await app.evaluate(({ app }) => app.getPath('userData')), 'the smoke test must not touch the real profile').toBe(join(dir, 'userData'))
     const win = await app.firstWindow()
-    type Status = { state: string; engine?: { version: string; features: string[] } }
+    type Status = { state: string; message?: string; engine?: { version: string; features: string[] } }
     const status = () => win.evaluate(() => (window as unknown as { aurora: { status: () => Promise<Status> } }).aurora.status())
-    await expect.poll(async () => (await status()).state, { timeout: 30_000 }).toBe('ready')
+    try {
+      await expect.poll(async () => (await status()).state, { timeout: 30_000 }).toBe('ready')
+    } catch (e) {
+      // Say why the bundled engine didn't start (a missing shared library, a lost exec bit, …).
+      const log = join(dir, 'userData', 'logs', 'engine.log')
+      console.error(`engine status: ${JSON.stringify(await status().catch(() => null))}`)
+      console.error(existsSync(log) ? `engine.log:\n${readFileSync(log, 'utf8').slice(-4000)}` : 'no engine.log')
+      throw e
+    }
     const engine = (await status()).engine!
     expect(engine.version).toBe(version)
     expect(engine.features.includes('fdk-aac')).toBe(variant === 'standard')
