@@ -1,43 +1,35 @@
-import { copyFileSync, readFileSync, writeFileSync } from 'node:fs'
+// Renders the NSIS wizard art from build-tools/installer-art/art.html (through Electron, at the exact bitmap sizes)
+// into app/build/installerSidebar.bmp and installerHeader.bmp, plus PNG previews in app/build/generated/.
+// The BMPs are committed assets: text rendering differs between machines, so re-run this by hand after editing
+// art.html rather than checking for staleness. Also refreshes app/build/license.txt (the license page).
+import { execFileSync } from 'node:child_process'
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { iconPixels } from '../src/shared/iconPixels.ts'
 import { encodeBmp24 } from './bmp.ts'
+import { encodePng } from './png.ts'
 import { REPO_ROOT } from './versions.ts'
 
-const CHARCOAL: [number, number, number] = [0x17, 0x15, 0x1a]
-const WHITE: [number, number, number] = [0xff, 0xff, 0xff]
-
-/** BGRA canvas of width x height, transparent except for the `size` x `size` app mark at (x, y). */
-function canvasWithMark(width: number, height: number, size: number, x: number, y: number): Uint8Array {
-  const canvas = new Uint8Array(width * height * 4)
-  const mark = iconPixels(size)
-  for (let row = 0; row < size; row++) canvas.set(mark.subarray(row * size * 4, (row + 1) * size * 4), ((y + row) * width + x) * 4)
-  return canvas
-}
-
-/** Wizard side panel (welcome and finish pages, and the uninstaller's): 164 x 314, charcoal, the mark centred near the top. */
-export function sidebarBmp(): Buffer {
-  return encodeBmp24(164, 314, canvasWithMark(164, 314, 96, (164 - 96) / 2, 48), CHARCOAL)
-}
-
-/** Wizard header bar (the white strip of the inner pages): 150 x 57, the mark at the right. */
-export function headerBmp(): Buffer {
-  return encodeBmp24(150, 57, canvasWithMark(150, 57, 41, 101, 8), WHITE)
-}
-
-const BUILD = join(REPO_ROOT, 'app/build')
-const FILES: [string, () => Buffer][] = [
-  ['installerSidebar.bmp', sidebarBmp],
-  ['installerHeader.bmp', headerBmp],
+const ART = [
+  { view: 'sidebar', file: 'installerSidebar.bmp', width: 164, height: 314 },
+  { view: 'header', file: 'installerHeader.bmp', width: 150, height: 57 },
 ]
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  if (process.argv.includes('--check')) {
-    const stale = FILES.filter(([name, make]) => { try { return !readFileSync(join(BUILD, name)).equals(make()) } catch { return true } })
-    if (stale.length) { console.error(`${stale.map(([n]) => `app/build/${n}`).join(', ')} stale: run node app/build-tools/make-installer-art.ts`); process.exit(1) }
-  } else {
-    for (const [name, make] of FILES) writeFileSync(join(BUILD, name), make())
-    copyFileSync(join(REPO_ROOT, 'LICENSE'), join(BUILD, 'license.txt')) // the installer's license page
+const app = join(REPO_ROOT, 'app')
+const electron = createRequire(import.meta.url)('electron') as string // the binary's path
+const out = mkdtempSync(join(tmpdir(), 'aurora-art-'))
+try {
+  mkdirSync(join(app, 'build', 'generated'), { recursive: true })
+  for (const a of ART) {
+    execFileSync(electron, [join(app, 'build-tools', 'render-installer-art.cjs'), a.view, join(out, `${a.view}.bgra`)], { stdio: 'inherit' })
+    const bgra = new Uint8Array(readFileSync(join(out, `${a.view}.bgra`)))
+    if (bgra.length !== a.width * a.height * 4) throw new Error(`${a.view}: got ${bgra.length} bytes, expected ${a.width * a.height * 4}`)
+    writeFileSync(join(app, 'build', a.file), encodeBmp24(a.width, a.height, bgra, [0x17, 0x15, 0x1a]))
+    writeFileSync(join(app, 'build', 'generated', `${a.view}-preview.png`), encodePng(a.width, a.height, bgra))
+    console.log(`wrote app/build/${a.file}`)
   }
+  copyFileSync(join(REPO_ROOT, 'LICENSE'), join(app, 'build', 'license.txt'))
+} finally {
+  rmSync(out, { recursive: true, force: true })
 }
