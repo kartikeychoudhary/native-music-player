@@ -16,3 +16,12 @@ if(NOT "$ENV{TARGET}" STREQUAL "$ENV{HOST}")
     set(CMAKE_SYSTEM_PROCESSOR AMD64)
   endif()
 endif()
+
+# config.toml gives fdk-aac's C++ sources /std:c++latest on ARM64 through CFLAGS_aarch64_pc_windows_msvc, and the
+# cmake crate copies CFLAGS into these flags too, where it clashes with opus's /std:c11 (cl D8016). Drop it here:
+# this toolchain file is only used by cmake builds, and opus is C.
+foreach(flags CMAKE_C_FLAGS CMAKE_C_FLAGS_RELEASE CMAKE_C_FLAGS_DEBUG CMAKE_C_FLAGS_RELWITHDEBINFO CMAKE_C_FLAGS_MINSIZEREL)
+  if(DEFINED ${flags})
+    string(REPLACE "/std:c++latest" "" ${flags} "${${flags}}")
+  endif()
+endforeach()
